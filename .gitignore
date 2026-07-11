@@ -3,6 +3,7 @@
 记账导出数据/*.csv
 bank_transactions.json
 bank_summary_2025.html
+failed_transactions_audit.txt
 __pycache__/
 *.pyc
 .claude/
