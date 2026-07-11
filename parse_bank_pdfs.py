@@ -965,15 +965,13 @@ tr.inc .amt{{color:var(--green)}}tr.exp .amt{{color:var(--red)}}
 </div>
 
 <nav class="tabs">
-<button class="active" data-tab="tab-report">报表</button>
+<button class="active" data-tab="tab-report">月度报表</button>
 <button data-tab="tab-charts">图表</button>
 <button data-tab="tab-yearly">年度</button>
 <button data-tab="tab-settings">设置</button>
 </nav>
 
-<div id="tab-report" class="tab-content active-tab">
-
-<!-- 筛选栏 -->
+<!-- 数据筛选（全页面共享）-->
 <div class="card" style="margin-bottom:20px">
 <h2 style="margin-bottom:16px">数据筛选</h2>
 <div class="filter-grid">
@@ -1014,6 +1012,8 @@ tr.inc .amt{{color:var(--green)}}tr.exp .amt{{color:var(--red)}}
 </div>
 </div>
 </div>
+
+<div id="tab-report" class="tab-content active-tab">
 
 <!-- 月度 KPI -->
 <div class="kpi" id="report-kpi">
