@@ -1090,7 +1090,7 @@ tr.inc .amt{{color:var(--green)}}tr.exp .amt{{color:var(--red)}}
 <th data-col="2">分类 <span class="sort-arrow">↑↓</span></th>
 <th data-col="3" style="text-align:right">金额 <span class="sort-arrow">↑↓</span></th>
 </tr></thead>
-<tbody>{"".join(table_rows)}</tbody>
+<tbody id="txn-tbody">{"".join(table_rows)}</tbody>
 </table></div>
 </div>
 
@@ -1225,7 +1225,7 @@ document.querySelector('.tabs').addEventListener('click',function(e){{
   btn.classList.add('active');
 }});
 
-var tbody=document.querySelector('tbody');
+var tbody=document.getElementById('txn-tbody');
 var rows=Array.from(tbody.querySelectorAll('tr'));
 var searchInput=document.getElementById('searchInput');
 var searchClear=document.getElementById('searchClear');
