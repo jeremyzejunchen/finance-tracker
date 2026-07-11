@@ -668,7 +668,7 @@ def build_report(transactions: list[dict]) -> str:
         cat = t.get('category', '其他')
         acct = t.get('account', 'DB')
         table_rows.append(
-            f'<tr class="{css}" data-category="{cat}" data-account="{acct}" data-internal="{1 if t.get("is_internal_transfer") else 0}">'
+            f'<tr class="{css}" data-category="{cat}" data-account="{acct}" data-internal="{1 if t.get("is_internal_transfer") else 0}" data-date="{t["booking_date"]}">'
             f'<td>{t["booking_date"]}</td>'
             f'<td>{t.get("merchant","")[:55]}</td>'
             f'<td><span class="tag">{cat}</span></td>'
@@ -1291,12 +1291,23 @@ function getCellVal(row,col){{
 function applyFilters(){{
   var q=searchInput.value.toLowerCase().trim();
   var account = document.getElementById('report-account').value;
+  var year = document.getElementById('report-year').value;
+  var month = document.getElementById('report-month').value;
+  var amtMin = parseFloat(document.getElementById('report-amt-min').value) || 0;
+  var amtMax = parseFloat(document.getElementById('report-amt-max').value) || Infinity;
   var visible=0;
   rows.forEach(function(r){{
     var matchAcct=account==='all'||r.dataset.account===account;
+    var matchYear=year==='all'||(r.dataset.date||'').substring(0,4)===year;
+    var matchMonth=month==='all'||(r.dataset.date||'').substring(0,7)===month;
+    var matchAmt=true;
+    if(amtMin>0||amtMax<Infinity){{
+      var amt=Math.abs(parseFloat((r.querySelector('.amt')||{{}}).dataset?.amount)||0);
+      matchAmt=amt>=amtMin&&amt<=amtMax;
+    }}
     var matchCat=!activeCat||r.dataset.category===activeCat;
     var matchSearch=!q||r.textContent.toLowerCase().indexOf(q)!==-1;
-    var show=matchAcct&&matchCat&&matchSearch;
+    var show=matchAcct&&matchYear&&matchMonth&&matchAmt&&matchCat&&matchSearch;
     r.classList.toggle('hidden',!show);
     if(show)visible++;
   }});
@@ -1460,19 +1471,19 @@ document.getElementById('report-year').addEventListener('change', function() {{
     el.style.display = (yr === 'all' || el.dataset.year === yr) ? 'block' : 'none';
   }});
 }});
-document.getElementById('report-month').addEventListener('change', updateReport);
-document.getElementById('report-category').addEventListener('change', updateReport);
+document.getElementById('report-month').addEventListener('change', function() {{ updateReport(); applyFilters(); }});
+document.getElementById('report-category').addEventListener('change', function() {{ updateReport(); applyFilters(); }});
 document.getElementById('report-search').addEventListener('input', function() {{
   clearTimeout(this._timer);
-  this._timer = setTimeout(updateReport, 200);
+  this._timer = setTimeout(function() {{ updateReport(); applyFilters(); }}, 200);
 }});
 document.getElementById('report-amt-min').addEventListener('input', function() {{
   clearTimeout(this._timer2);
-  this._timer2 = setTimeout(updateReport, 300);
+  this._timer2 = setTimeout(function() {{ updateReport(); applyFilters(); }}, 300);
 }});
 document.getElementById('report-amt-max').addEventListener('input', function() {{
   clearTimeout(this._timer3);
-  this._timer3 = setTimeout(updateReport, 300);
+  this._timer3 = setTimeout(function() {{ updateReport(); applyFilters(); }}, 300);
 }});
 
 // Initial report render
