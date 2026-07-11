@@ -30,14 +30,19 @@ python parse_bank_pdfs.py --month 2025-06
 parse_bank_pdfs.py              ← 主脚本。所有 HTML/CSS/JS 都在 build_report() 中生成
   ├── parse_transactions_format()       → PDF 格式 "Transactions_"（1-3 月）
   ├── parse_account_statement_format()  → PDF 格式 "Account_statement_"（5-6 月）
+  ├── parse_trade_republic_csv()        → CSV 格式 Trade Republic 导出
+  ├── parse_paypal_csv()                → CSV 格式 PayPal 导出（英文/德文）
+  ├── match_paypal_to_bank()            → PayPal 交易与银行流水匹配去重
   ├── categorize()               → 通过关键字匹配给每笔交易分配分类
   ├── build_report()             → 生成 bank_summary_2025.html（所有 UI 在此）
   └── post_process()             → 商户名清洗 + 去重
 
-bank_transactions.json           ← 缓存（270 笔交易）。--force 或 PDF 变动时删除重建
+bank_transactions.json           ← 缓存（935 笔交易）。--force 或 PDF 变动时删除重建
 bank_summary_2025.html           ← 生成的输出（~5MB，Plotly.js 内嵌 + JSON 数据内嵌）
 
 银行流水/*.pdf                   ← 源 PDF 银行流水（18 个文件，2025 年 1 月 ~ 2026 年 6 月）
+银行流水/Paypal-*.csv            ← PayPal 一年流水（支持英文/德文格式，自动匹配去重）
+银行流水/transactions_*.csv      ← Trade Republic CSV 导出
 记账导出数据/鲨鱼记账明细*.csv    ← 手动记账导出（独立系统，本脚本不使用）
 ```
 
@@ -83,12 +88,22 @@ bank_summary_2025.html           ← 生成的输出（~5MB，Plotly.js 内嵌 +
 ```
 PDF 文本提取（PyMuPDF）
   → 按格式解析（parse_transactions_format / parse_account_statement_format）
-  → post_process（清洗/去重）
+  → Trade Republic CSV 解析（parse_trade_republic_csv）
+  → PayPal CSV 解析 + 银行流水匹配（parse_paypal_csv + match_paypal_to_bank）
+  → detect_internal_transfers（内部转账/换汇检测）
+  → post_process（清洗/去重/失败交易检测）
   → categorize（分类）
-  → JSON 缓存（bank_transactions.json，含 PDF 数量校验）
+  → JSON 缓存（bank_transactions.json，含文件数量校验）
   → build_report() 按日期排序、按月/年聚合、预渲染 HTML/Plotly/JSON
-  → bank_summary_2025.html（自包含三页签 SPA）
+  → bank_summary_2025.html（自包含四页签 SPA）
 ```
+
+PayPal CSV 匹配逻辑：
+- PayPal 真实交易（排除 Bank Deposit/Withdrawal/Authorization/Card Deposit）
+- 按金额 + 日期（±5 天）匹配银行 PayPal SEPA 交易
+- 匹配成功 → 用 PayPal 商户名替换银行 "PayPal Europe" 条目
+- PayPal 收入匹配银行 PAYPAL 收入 → 标记银行为内部转账（提现）
+- 未匹配 → 作为新交易添加到数据中
 
 缓存失效条件：`--force` 或 PDF 数量变化或任意 PDF 修改时间晚于缓存。
 
