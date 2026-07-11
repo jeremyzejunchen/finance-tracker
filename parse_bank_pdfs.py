@@ -1355,7 +1355,7 @@ function updateReport() {{
     tr.className = 'cat-expand-row';
     tr.style.cursor = 'pointer';
     tr.innerHTML = '<td><i class="fas fa-chevron-right" style="font-size:.7rem;margin-right:6px;transition:transform .2s"></i>' + cat + '</td>' +
-      '<td style="text-align:right;color:var(--red);font-weight:600">' + '€'.encode().decode('unicode-escape') + amt.toFixed(2) + '</td>' +
+      '<td style="text-align:right;color:var(--red);font-weight:600">' + '€' + amt.toFixed(2) + '</td>' +
       '<td style="text-align:right">' + pct + '%</td>' +
       '<td style="text-align:right">' + (catCounts[cat] || 0) + '</td>';
     tbody.appendChild(tr);
@@ -1367,7 +1367,7 @@ function updateReport() {{
     catTxns.forEach(function(t) {{
       subHtml += '<div style="display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px solid var(--border)">' +
         '<span>' + t.date + ' <span style="color:var(--text2)">' + (t.merchant || t.description).substring(0,40) + '</span></span>' +
-        '<span style="color:var(--red);font-weight:500">' + '€'.encode().decode('unicode-escape') + '-' + t.amount.toFixed(2) + '</span></div>';
+        '<span style="color:var(--red);font-weight:500">' + '€' + '-' + t.amount.toFixed(2) + '</span></div>';
     }});
     subHtml += '</div></td>';
     subRow.innerHTML = subHtml;
@@ -1442,18 +1442,19 @@ document.getElementById('report-account').addEventListener('change', function() 
   applyFilters();
 }});
 document.getElementById('report-year').addEventListener('change', function() {{
-  updateReport();
-  updateYearlyStats();
   var yr = this.value;
-  // 筛选月份下拉
+  // 先筛选月份下拉
   var monthSel = document.getElementById('report-month');
   Array.from(monthSel.options).forEach(function(opt) {{
     if (opt.value === 'all') return;
     opt.style.display = (yr === 'all' || opt.dataset.year === yr) ? '' : 'none';
   }});
+  // 先重置月份再更新报表
   if (yr !== 'all' && monthSel.value !== 'all' && monthSel.value.substring(0,4) !== yr) {{
     monthSel.value = 'all';
   }}
+  updateReport();
+  updateYearlyStats();
   // 切换年度趋势图
   document.querySelectorAll('.yearly-chart').forEach(function(el) {{
     el.style.display = (yr === 'all' || el.dataset.year === yr) ? 'block' : 'none';
