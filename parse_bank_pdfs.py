@@ -554,6 +554,7 @@ def build_report(transactions: list[dict]) -> str:
         title="月度支出分类", barmode='stack',
         xaxis_title="月份", yaxis_title="EUR",
         template='plotly_white', height=480, margin=dict(l=40, r=20, t=50, b=40),
+        yaxis_tickprefix='€', yaxis_tickformat=',.0f',
     )
 
     # 图表2: 月度收支对比
@@ -566,6 +567,7 @@ def build_report(transactions: list[dict]) -> str:
         title="月度收支对比", barmode='group',
         xaxis_title="月份", yaxis_title="EUR",
         template='plotly_white', height=400, margin=dict(l=40, r=20, t=50, b=40),
+        yaxis_tickprefix='€', yaxis_tickformat=',.0f',
     )
 
     # 图表3: 累计净额
@@ -584,6 +586,7 @@ def build_report(transactions: list[dict]) -> str:
     fig_cum.update_layout(
         title="累计净额走势", xaxis_title="日期", yaxis_title="EUR",
         template='plotly_white', height=360, margin=dict(l=40, r=20, t=50, b=40),
+        yaxis_tickprefix='€', yaxis_tickformat=',.0f',
     )
 
     # 图表4: 分类占比环形图
