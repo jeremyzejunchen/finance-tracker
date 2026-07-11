@@ -534,6 +534,8 @@ def build_report(transactions: list[dict]) -> str:
     all_cats = set()
 
     for t in txns:
+        if t.get('is_internal_transfer'):
+            continue  # 内部转账和换汇不参与图表统计
         mk = t['booking_date'][:7]
         cat = t.get('category', '其他')
         if t['amount'] > 0:
