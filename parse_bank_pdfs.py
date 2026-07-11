@@ -1430,7 +1430,8 @@ function updateYearlyTrendChart(txns) {{
   ];
   var layout = {{
     barmode: 'group', height: 400, hovermode: 'x unified',
-    template: 'plotly_white', margin: {{l:40,r:20,t:10,b:40}},
+    template: 'plotly_white', margin: {{l:50,r:10,t:30,b:60}},
+    legend: {{orientation:'h',y:-0.15,x:0.5,xanchor:'center'}},
     yaxis: {{tickprefix: 'EUR ', tickformat: ',.0f'}},
     paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
   }};
@@ -1457,7 +1458,8 @@ function updateMonthlyCategoryChart(txns) {{
     traces.push({{ type: 'bar', name: cat, x: months, y: months.map(function(m){{return catMap[cat][m]||0}}), marker:{{color:colors[ci%colors.length]}} }});
     ci++;
   }});
-  var layout = {{ barmode:'stack', height:480, template:'plotly_white', margin:{{l:40,r:20,t:30,b:40}},
+  var layout = {{ barmode:'stack', height:420, template:'plotly_white', margin:{{l:40,r:10,t:30,b:60}},
+    legend:{{orientation:'h',y:-0.15,x:0.5,xanchor:'center'}},
     yaxis:{{tickprefix:'EUR ',tickformat:',.0f'}}, paper_bgcolor:'rgba(0,0,0,0)',plot_bgcolor:'rgba(0,0,0,0)' }};
   Plotly.react('chart-monthly-cat', traces, layout, {{displayModeBar:false,responsive:true}});
 }}
@@ -1475,7 +1477,8 @@ function updateMonthlyCompareChart(txns) {{
     {{ type:'bar',name:'收入',x:months,y:months.map(function(m){{return incMap[m]||0}}),marker:{{color:'#10b981'}}}},
     {{ type:'bar',name:'支出',x:months,y:months.map(function(m){{return expMap[m]||0}}),marker:{{color:'#ef4444'}}}}
   ];
-  var layout = {{ barmode:'group',height:400,template:'plotly_white',margin:{{l:40,r:20,t:30,b:40}},
+  var layout = {{ barmode:'group',height:360,template:'plotly_white',margin:{{l:40,r:10,t:30,b:60}},
+    legend:{{orientation:'h',y:-0.15,x:0.5,xanchor:'center'}},
     yaxis:{{tickprefix:'EUR ',tickformat:',.0f'}},paper_bgcolor:'rgba(0,0,0,0)',plot_bgcolor:'rgba(0,0,0,0)' }};
   Plotly.react('chart-monthly-compare', data, layout, {{displayModeBar:false,responsive:true}});
 }}
@@ -1490,7 +1493,7 @@ function updateCumulativeNetChart(txns) {{
     run.push(running);
   }});
   var data = [{{ type:'scatter',x:dates,y:run,mode:'lines',fill:'tozeroy',name:'累计净额',line:{{color:'#6366f1',width:2}} }}];
-  var layout = {{ height:360,template:'plotly_white',margin:{{l:40,r:20,t:30,b:40}},
+  var layout = {{ height:360,template:'plotly_white',margin:{{l:50,r:10,t:30,b:40}},
     yaxis:{{tickprefix:'EUR ',tickformat:',.0f'}},paper_bgcolor:'rgba(0,0,0,0)',plot_bgcolor:'rgba(0,0,0,0)' }};
   Plotly.react('chart-cumulative-net', data, layout, {{displayModeBar:false,responsive:true}});
 }}

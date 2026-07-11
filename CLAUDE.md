@@ -98,6 +98,18 @@ PDF 文本提取（PyMuPDF）
 
 只上传代码，不提交数据文件（PDF 银行流水、CSV 导出、缓存、生成的 HTML）。
 
+## 数据逻辑联动规则
+
+每次修改数据过滤逻辑（如新增排除规则、修改分类条件、调整内部转账/换汇/失败交易检测），
+必须同步检查并更新以下**所有**组件：
+- Python 端：`build_report()` 中 `ext_txns` 过滤条件、月度汇总循环、图表数据聚合
+- JS 端：`updateReport()` 中的 `extFiltered`、`updateYearlyStats()` 的过滤条件
+- JS 图表：`updateAllCharts()` → `updateYearlyTrendChart` / `updateMonthlyCategoryChart` / `updateMonthlyCompareChart` / `updateCumulativeNetChart`
+- JS 饼图：`updatePieChart()` 调用时的数据参数
+- 交易表：`applyFilters()` 的过滤逻辑
+
+核心原则：**逻辑改一处，全局改所有**。不一致会导致图表/表格/KPI 显示互相矛盾的数据。
+
 ## 验证规则
 
 每次代码改动完成后，必须用 Playwright 自动检查网页：
