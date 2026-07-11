@@ -72,7 +72,7 @@ bank_summary_2025.html           ← 生成的输出（~5MB，Plotly.js 内嵌 +
 - 用户偏好（分类、标签、固定支出规则）通过 localStorage 持久化，key 为 `bankPrefs`
 - Font Awesome 6.2.1 通过 CDN 加载图标
 - CSS 全部自定义，无外部框架依赖
-- 深色模式通过 `prefers-color-scheme: dark` 自动切换
+- 深色/明亮模式通过右上角按钮手动切换，偏好保存在 localStorage（`bankTheme`），默认深色。CSS 使用 `[data-theme="dark"]` 选择器控制
 
 ## 分类规则
 
