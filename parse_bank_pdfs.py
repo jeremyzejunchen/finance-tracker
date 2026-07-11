@@ -1072,20 +1072,20 @@ tr.inc .amt{{color:var(--green)}}tr.exp .amt{{color:var(--red)}}
 
 <div id="tab-charts" class="tab-content">
 
-<div class="card"><h2>月度支出分类</h2>{to_html(fig_cat, include_plotlyjs=False, full_html=False)}</div>
+<div class="card"><h2>月度支出分类</h2><div id="chart-monthly-cat" style="height:480px"></div></div>
 
 <div class="charts-grid">
-<div class="card"><h2>月度收支对比</h2>{to_html(fig_month, include_plotlyjs=False, full_html=False)}</div>
-<div class="card"><h2>累计净额走势</h2>{to_html(fig_cum, include_plotlyjs=False, full_html=False)}</div>
+<div class="card"><h2>月度收支对比</h2><div id="chart-monthly-compare" style="height:400px"></div></div>
+<div class="card"><h2>累计净额走势</h2><div id="chart-cumulative-net" style="height:360px"></div></div>
 </div>
 
 </div><!-- /tab-charts -->
 </div><!-- /tab-charts -->
 
 <div id="tab-yearly" class="tab-content">
-<!-- 年度趋势图（每年一张） -->
+<!-- 年度趋势图（JS 动态渲染） -->
 <div class="card" style="margin-top:20px"><h2>年度收支趋势</h2>
-{"".join(f'<div class="yearly-chart" data-year="{y}" style="display:none">{to_html(fig, include_plotlyjs=False, full_html=False)}</div>' for y, fig in yearly_charts.items())}
+<div id="yearly-trend-chart" style="height:400px"></div>
 </div>
 
 <!-- 年度统计 -->
@@ -1410,6 +1410,98 @@ function updateReport() {{
   updatePieChart('rpt-income-pie', 'income', extFiltered);
 }}
 
+
+/* ── Yearly trend chart (dynamic) ── */
+function updateYearlyTrendChart(txns) {{
+  var months = ['01月','02月','03月','04月','05月','06月','07月','08月','09月','10月','11月','12月'];
+  var incData = Array(12).fill(0), expData = Array(12).fill(0);
+  txns.forEach(function(t) {{
+    var m = parseInt(t.date.substring(5,7)) - 1;
+    if (m >= 0 && m < 12) {{
+      if (t.type === 'income') incData[m] += t.amount; else expData[m] += t.amount;
+    }}
+  }});
+  var balData = incData.map(function(v,i) {{ return v - expData[i]; }});
+  var data = [
+    {{ type: 'bar', name: '收入', x: months, y: incData, marker: {{color: '#10b981'}} }},
+    {{ type: 'bar', name: '支出', x: months, y: expData, marker: {{color: '#ef4444'}} }},
+    {{ type: 'scatter', name: '结余', x: months, y: balData, mode: 'lines+markers',
+       line: {{color: '#6366f1', width: 3}}, marker: {{size: 8}} }}
+  ];
+  var layout = {{
+    barmode: 'group', height: 400, hovermode: 'x unified',
+    template: 'plotly_white', margin: {{l:40,r:20,t:10,b:40}},
+    yaxis: {{tickprefix: 'EUR ', tickformat: ',.0f'}},
+    paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
+  }};
+  Plotly.react('yearly-trend-chart', data, layout, {{displayModeBar: false, responsive: true}});
+}}
+
+/* ── Charts tab: monthly category stacked bar ── */
+function updateMonthlyCategoryChart(txns) {{
+  var months = [], catMap = {{}};
+  txns.filter(function(t) {{ return t.type === 'expense'; }}).forEach(function(t) {{
+    var m = t.date.substring(0,7);
+    if (months.indexOf(m) < 0) months.push(m);
+    if (!catMap[t.category]) catMap[t.category] = {{}};
+    catMap[t.category][m] = (catMap[t.category][m] || 0) + t.amount;
+  }});
+  months.sort();
+  var traces = [];
+  var colors = ['#ef4444','#f97316','#f59e0b','#eab308','#84cc16','#22c55e','#10b981','#14b8a6','#06b6d4','#3b82f6','#6366f1','#8b5cf6','#a855f7','#d946ef','#ec4899'];
+  var ci = 0;
+  Object.keys(catMap).sort(function(a,b) {{
+    var ta=0,tb=0; Object.values(catMap[a]).forEach(function(v){{ta+=v}}); Object.values(catMap[b]).forEach(function(v){{tb+=v}});
+    return tb-ta;
+  }}).forEach(function(cat) {{
+    traces.push({{ type: 'bar', name: cat, x: months, y: months.map(function(m){{return catMap[cat][m]||0}}), marker:{{color:colors[ci%colors.length]}} }});
+    ci++;
+  }});
+  var layout = {{ barmode:'stack', height:480, template:'plotly_white', margin:{{l:40,r:20,t:30,b:40}},
+    yaxis:{{tickprefix:'EUR ',tickformat:',.0f'}}, paper_bgcolor:'rgba(0,0,0,0)',plot_bgcolor:'rgba(0,0,0,0)' }};
+  Plotly.react('chart-monthly-cat', traces, layout, {{displayModeBar:false,responsive:true}});
+}}
+
+/* ── Charts tab: monthly income vs expense ── */
+function updateMonthlyCompareChart(txns) {{
+  var months = [], incMap={{}}, expMap={{}};
+  txns.forEach(function(t) {{
+    var m = t.date.substring(0,7);
+    if (months.indexOf(m) < 0) months.push(m);
+    if (t.type === 'income') incMap[m]=(incMap[m]||0)+t.amount; else expMap[m]=(expMap[m]||0)+t.amount;
+  }});
+  months.sort();
+  var data = [
+    {{ type:'bar',name:'收入',x:months,y:months.map(function(m){{return incMap[m]||0}}),marker:{{color:'#10b981'}}}},
+    {{ type:'bar',name:'支出',x:months,y:months.map(function(m){{return expMap[m]||0}}),marker:{{color:'#ef4444'}}}}
+  ];
+  var layout = {{ barmode:'group',height:400,template:'plotly_white',margin:{{l:40,r:20,t:30,b:40}},
+    yaxis:{{tickprefix:'EUR ',tickformat:',.0f'}},paper_bgcolor:'rgba(0,0,0,0)',plot_bgcolor:'rgba(0,0,0,0)' }};
+  Plotly.react('chart-monthly-compare', data, layout, {{displayModeBar:false,responsive:true}});
+}}
+
+/* ── Charts tab: cumulative net ── */
+function updateCumulativeNetChart(txns) {{
+  var sorted = txns.slice().sort(function(a,b){{return a.date.localeCompare(b.date)}});
+  var dates=[], running=0, run=[];
+  sorted.forEach(function(t) {{
+    dates.push(t.date);
+    running += (t.type==='income'? t.amount : -t.amount);
+    run.push(running);
+  }});
+  var data = [{{ type:'scatter',x:dates,y:run,mode:'lines',fill:'tozeroy',name:'累计净额',line:{{color:'#6366f1',width:2}} }}];
+  var layout = {{ height:360,template:'plotly_white',margin:{{l:40,r:20,t:30,b:40}},
+    yaxis:{{tickprefix:'EUR ',tickformat:',.0f'}},paper_bgcolor:'rgba(0,0,0,0)',plot_bgcolor:'rgba(0,0,0,0)' }};
+  Plotly.react('chart-cumulative-net', data, layout, {{displayModeBar:false,responsive:true}});
+}}
+
+/* ── Master chart updater ── */
+function updateAllCharts(txns) {{
+  updateYearlyTrendChart(txns);
+  updateMonthlyCategoryChart(txns);
+  updateMonthlyCompareChart(txns);
+  updateCumulativeNetChart(txns);
+}}
 function updatePieChart(divId, type, txns) {{
   var catData = {{}};
   txns.filter(function(t) {{ return t.type === type; }}).forEach(function(t) {{
@@ -1461,6 +1553,18 @@ document.getElementById('report-account').addEventListener('change', function() 
   updateReport();
   updateYearlyStats();
   applyFilters();
+  // 获取排除后的数据更新图表
+  var acct=this.value, yr=document.getElementById('report-year').value, mo=document.getElementById('report-month').value;
+  var filtered=transactions.filter(function(t){{
+    if(!t.isInternal&&!t.isFailed) {{
+      if(acct!=='all'&&t.account!==acct) return false;
+      if(yr!=='all'&&t.date.substring(0,4)!==yr) return false;
+      if(mo!=='all'&&t.date.substring(0,7)!==mo) return false;
+      return true;
+    }}
+    return false;
+  }});
+  updateAllCharts(filtered);
 }});
 document.getElementById('report-year').addEventListener('change', function() {{
   var yr = this.value;
@@ -1476,12 +1580,20 @@ document.getElementById('report-year').addEventListener('change', function() {{
   }}
   updateReport();
   updateYearlyStats();
-  // 切换年度趋势图
-  document.querySelectorAll('.yearly-chart').forEach(function(el) {{
-    el.style.display = (yr === 'all' || el.dataset.year === yr) ? 'block' : 'none';
+  // 更新动态图表
+  var acct2=document.getElementById('report-account').value, mo2=document.getElementById('report-month').value;
+  var filtered2=transactions.filter(function(t){{
+    if(!t.isInternal&&!t.isFailed) {{
+      if(acct2!=='all'&&t.account!==acct2) return false;
+      if(yr!=='all'&&t.date.substring(0,4)!==yr) return false;
+      if(mo2!=='all'&&t.date.substring(0,7)!==mo2) return false;
+      return true;
+    }}
+    return false;
   }});
+  updateAllCharts(filtered2);
 }});
-document.getElementById('report-month').addEventListener('change', function() {{ updateReport(); applyFilters(); }});
+document.getElementById('report-month').addEventListener('change', function() {{ updateReport(); applyFilters(); updateAllCharts(getFilteredExtTxns()); }});
 document.getElementById('report-category').addEventListener('change', function() {{ updateReport(); applyFilters(); }});
 document.getElementById('report-search').addEventListener('input', function() {{
   clearTimeout(this._timer);
@@ -1498,6 +1610,21 @@ document.getElementById('report-amt-max').addEventListener('input', function() {
 
 // Initial report render
 updateReport();
+updateAllCharts(getFilteredExtTxns());
+
+function getFilteredExtTxns() {{
+  var acct=document.getElementById('report-account').value;
+  var yr=document.getElementById('report-year').value;
+  var mo=document.getElementById('report-month').value;
+  return transactions.filter(function(t){{
+    if(t.isInternal||t.isFailed) return false;
+    if(acct!=='all'&&t.account!==acct) return false;
+    if(yr!=='all'&&t.date.substring(0,4)!==yr) return false;
+    if(mo!=='all'&&t.date.substring(0,7)!==mo) return false;
+    return true;
+  }});
+}}
+
 
 /* ── Yearly statistics ── */
 function updateYearlyStats() {{
