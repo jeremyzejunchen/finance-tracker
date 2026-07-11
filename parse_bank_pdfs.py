@@ -272,7 +272,7 @@ def parse_account_statement_format(text: str) -> list[dict]:
         type_line = lines[i].strip()
         i += 1
 
-        # 收集商户名行，直到遇到拆分日期 (DD-MM-)
+        # 收集商户名行，直到遇到拆分日期或下一笔金额
         merchant_lines = []
         while i < len(lines):
             nl = lines[i].strip()
@@ -282,8 +282,6 @@ def parse_account_statement_format(text: str) -> list[dict]:
             if DATE_PART_F2_RE.match(nl):
                 break
             if AMOUNT_F2_RE.match(nl):
-                break
-            if nl in SKIP_F2_LINES or any(nl.startswith(x) for x in SKIP_F2_PREFIXES):
                 break
             merchant_lines.append(nl)
             i += 1
@@ -303,7 +301,7 @@ def parse_account_statement_format(text: str) -> list[dict]:
         value_date = read_split_date()
         booking_date = read_split_date()
 
-        # 收集详情行
+        # 收集详情行，直到下一笔金额或日期
         details_lines = []
         while i < len(lines):
             nl = lines[i].strip()
@@ -311,14 +309,6 @@ def parse_account_statement_format(text: str) -> list[dict]:
                 i += 1
                 continue
             if AMOUNT_F2_RE.match(nl) or DATE_PART_F2_RE.match(nl):
-                break
-            if nl in SKIP_F2_LINES:
-                # IBAN of Page Statement block → skip the whole block
-                if nl in ('IBAN', 'of', 'Page', 'Statement'):
-                    i += 1
-                    continue
-                break
-            if any(nl.startswith(x) for x in SKIP_F2_PREFIXES):
                 break
             details_lines.append(nl)
             i += 1
@@ -344,7 +334,10 @@ def extract_merchant_f2(type_line: str, merchant_lines: list[str]) -> str:
         'SEPA Lastschrifteinzug von ',
         'SEPA Überweisung an ',
         'SEPA Überweisung von ',
+        'SEPA Echtzeitüberweisung an ',
+        'SEPA Echtzeitüberweisung von ',
         'Echtzeitüberweisung an ',
+        'Echtzeitüberweisung von ',
         'Dauerauftrag an ',
         'Gutschrift von ',
     ]
@@ -385,13 +378,17 @@ def norm_date_f2(d: str) -> str:
 
 
 def parse_amount_f2(s: str) -> float:
-    """'- 19.90' 或 '+ 3.10' 或 '- 1.024,54' → float."""
+    """'- 19.90' 或 '+ 3.10' 或 '- 1.024,54' 或 '- 3,967.42' → float."""
     s = s.strip()
     sign = -1 if s.startswith('-') else 1
     s = s[1:].strip()  # 去掉符号
-    # 德式: 1.024,54 → 1024.54
     if ',' in s and '.' in s:
-        s = s.replace('.', '').replace(',', '.')
+        # 倒数第3位是逗号 → 德式 (1.024,54)
+        if len(s) > 3 and s[-3] == ',':
+            s = s.replace('.', '').replace(',', '.')
+        # 倒数第3位是点 → 英美式 (1,024.54)
+        else:
+            s = s.replace(',', '')
     elif ',' in s:
         s = s.replace(',', '.')
     return sign * float(s)
