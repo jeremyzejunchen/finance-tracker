@@ -47,6 +47,7 @@ EXPENSE_RULES = [
     ("电费", ["E.ON ENERGIE", "STADTWERKE"]),
     ("广电费", ["RUNDFUNK"]),
     ("网费", ["TELEKOM DEUTSCHLAND"]),
+    ("话费", ["VODAFONE"]),
     ("健康保险", ["TECHNIKER KRANKENKASSE"]),
     ("其他保险", ["GOTHAER ALLGEMEINE", "HANSEMERKUR", "SIGNAL IDUNA"]),
     ("车险", ["VOLKSWAGEN AUTOVERSICHERUNG", "HUK-COBURG", "SPARKASSEN DIREKTVERSICHERUNG"]),
@@ -507,9 +508,17 @@ def categorize(merchant: str, amount: float, details: str = "") -> str:
         for kw in keywords:
             if kw in upper:
                 return cat
-    # PayPal 未识别 → 尝试从详情推断
+    # PayPal 未识别 → 从详情提取真实商户名再匹配
     if 'PAYPAL' in upper:
         du = details.upper()
+        # 提取 "Ihr Einkauf bei XXX" 中的商户名
+        m = re.search(r'(?:IHR EINKAUF BEI|PAYPAL-ZAHLUNG UBER)\s+(.+?)(?:,|$)', du)
+        if m:
+            extracted = m.group(1).strip()
+            for cat, keywords in EXPENSE_RULES:
+                for kw in keywords:
+                    if kw in extracted:
+                        return cat
         for cat, keywords in EXPENSE_RULES:
             for kw in keywords:
                 if kw in du:
@@ -1250,6 +1259,34 @@ var transactions = RAW_TRANSACTIONS.map(function(t) {{
   }};
 }});
 
+/* ── Category hierarchy ── */
+var CAT_HIERARCHY = {{
+  '固定支出': {{
+    subs: ['房租','电费','广电费','网费','话费','健康保险','其他保险','车险','汽车保养','健身']
+  }},
+  '活动支出': {{
+    subs: [
+      '超市日用品','线上购物','线下购物','餐饮外食',
+      {{name:'汽车/交通', subs:['油费','停车费','汽车税','罚款','公共交通']}},
+      '宠物','医疗','旅行','服饰','娱乐','学费','市政缴费','网上充值','邮寄',
+      '家人转账','朋友转账','投资','押金退回','PayPal通用','其他'
+    ]
+  }},
+  '收入': {{
+    subs: ['工资','大学薪资','奖学金/津贴','二手收入','投资收入','利息收入','其他收入']
+  }}
+}};
+
+function getSubCats(subs) {{
+  var result = [];
+  subs.forEach(function(s) {{
+    if (typeof s === 'string') result.push(s);
+    else {{ result.push(s.name); result = result.concat(getSubCats(s.subs)); }}
+  }});
+  return result;
+}}
+
+
 /* ── Theme toggle ── */
 (function(){{
   var html=document.documentElement, btn=document.getElementById('themeToggle');
@@ -1398,51 +1435,95 @@ function updateReport() {{
   balEl.textContent = '€' + (bal >= 0 ? '+' : '') + bal.toFixed(2);
   document.getElementById('rpt-count').textContent = filtered.length;
 
-  // Category detail table (expandable)
+  // Hierarchical category detail table
   var totalExpense = totalOut;
   var tbody = document.getElementById('rpt-expense-detail');
   tbody.innerHTML = '';
-  var sorted = Object.keys(catTotals).sort(function(a,b) {{ return catTotals[b] - catTotals[a]; }});
-  sorted.forEach(function(cat) {{
-    var amt = catTotals[cat];
-    var pct = totalExpense > 0 ? (amt / totalExpense * 100).toFixed(1) : '0.0';
-    var catTxns = filtered.filter(function(t) {{ return t.category === cat && t.type === 'expense'; }})
-                         .sort(function(a,b) {{ return b.date.localeCompare(a.date); }});
+
+  function renderLevel(container, subs, level) {{
+    subs.forEach(function(sub) {{
+      var subName = typeof sub === 'string' ? sub : sub.name;
+      var subSubs = typeof sub === 'string' ? null : sub.subs;
+      var amt = catTotals[subName] || 0;
+      if (amt === 0 && !subSubs) return;
+      var pct = totalExpense > 0 ? (amt / totalExpense * 100).toFixed(1) : '0.0';
+      var cnt = catCounts[subName] || 0;
+      var indent = 'padding-left:' + (16 + level*20) + 'px';
+
+      var tr = document.createElement('tr');
+      tr.className = 'cat-expand-row';
+      tr.style.cursor = subSubs ? 'pointer' : 'default';
+      var icon = subSubs ? '<i class=\"fas fa-chevron-right\" style=\"font-size:.7rem;margin-right:6px;transition:transform .2s\"></i>' : '<span style=\"display:inline-block;width:16px\"></span>';
+      tr.innerHTML = '<td style=\"' + indent + '\">' + icon + subName + '</td>' +
+        '<td style=\"text-align:right;color:var(--red);font-weight:600\">' + (amt > 0 ? 'EUR ' + amt.toFixed(2) : '-') + '</td>' +
+        '<td style=\"text-align:right\">' + (amt > 0 ? pct + '%' : '-') + '</td>' +
+        '<td style=\"text-align:right\">' + (cnt > 0 ? cnt : '-') + '</td>';
+      container.appendChild(tr);
+
+      if (subSubs) {{
+        subSubs.forEach(function(ss) {{
+          var ssAmt = catTotals[ss] || 0;
+          if (ssAmt === 0) return;
+          var ssPct = totalExpense > 0 ? (ssAmt / totalExpense * 100).toFixed(1) : '0.0';
+          var ssCnt = catCounts[ss] || 0;
+          var ssRow = document.createElement('tr');
+          ssRow.className = 'cat-l3-row';
+          ssRow.style.display = 'none';
+          ssRow.innerHTML = '<td style=\"padding-left:' + (36 + level*20) + 'px;font-size:.85rem;color:var(--text2)\">' + ss + '</td>' +
+            '<td style=\"text-align:right;color:var(--red);font-size:.85rem\">EUR ' + ssAmt.toFixed(2) + '</td>' +
+            '<td style=\"text-align:right;font-size:.85rem\">' + ssPct + '%</td>' +
+            '<td style=\"text-align:right;font-size:.85rem\">' + ssCnt + '</td>';
+          container.appendChild(ssRow);
+        }});
+
+        tr.addEventListener('click', function() {{
+          var icon = this.querySelector('i');
+          var next = this.nextElementSibling;
+          while (next && next.classList.contains('cat-l3-row')) {{
+            var show = next.style.display === 'none';
+            next.style.display = show ? '' : 'none';
+            next = next.nextElementSibling;
+          }}
+          icon.style.transform = icon.style.transform === 'rotate(90deg)' ? '' : 'rotate(90deg)';
+        }});
+      }}
+    }});
+  }}
+
+  Object.keys(CAT_HIERARCHY).forEach(function(l1) {{
+    var info = CAT_HIERARCHY[l1];
+    var l1Subs = info.subs;
+    var l1Total = 0, l1Cnt = 0;
+    getSubCats(l1Subs).forEach(function(sc) {{
+      l1Total += (catTotals[sc] || 0);
+      l1Cnt += (catCounts[sc] || 0);
+    }});
+    if (l1Total === 0) return;
+
     var tr = document.createElement('tr');
-    tr.className = 'cat-expand-row';
+    tr.className = 'cat-l1-row';
     tr.style.cursor = 'pointer';
-    tr.innerHTML = '<td><i class="fas fa-chevron-right" style="font-size:.7rem;margin-right:6px;transition:transform .2s"></i>' + cat + '</td>' +
-      '<td style="text-align:right;color:var(--red);font-weight:600">' + '€' + amt.toFixed(2) + '</td>' +
-      '<td style="text-align:right">' + pct + '%</td>' +
-      '<td style="text-align:right">' + (catCounts[cat] || 0) + '</td>';
+    tr.style.cssText = 'background:var(--bg);font-weight:700;border-top:2px solid var(--border)';
+    tr.innerHTML = '<td><i class=\"fas fa-chevron-down\" style=\"font-size:.7rem;margin-right:6px;transition:transform .2s\"></i>' + l1 + '</td>' +
+      '<td style=\"text-align:right;color:var(--red);font-weight:700\">EUR ' + l1Total.toFixed(2) + '</td>' +
+      '<td style=\"text-align:right\">' + (totalExpense > 0 ? (l1Total/totalExpense*100).toFixed(1) : '0') + '%</td>' +
+      '<td style=\"text-align:right\">' + l1Cnt + '</td>';
     tbody.appendChild(tr);
 
-    var subRow = document.createElement('tr');
-    subRow.className = 'cat-sub-row';
-    subRow.style.display = 'none';
-    var subHtml = '<td colspan="4" style="padding:0"><div style="padding:4px 20px 8px;font-size:.82rem">';
-    catTxns.forEach(function(t) {{
-      subHtml += '<div style="display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px solid var(--border)">' +
-        '<span>' + t.date + ' <span style="color:var(--text2)">' + (t.merchant || t.description).substring(0,40) + '</span></span>' +
-        '<span style="color:var(--red);font-weight:500">' + '€' + '-' + t.amount.toFixed(2) + '</span></div>';
-    }});
-    subHtml += '</div></td>';
-    subRow.innerHTML = subHtml;
-    tbody.appendChild(subRow);
+    var l2Container = document.createElement('tbody');
+    l2Container.style.display = '';
+    renderLevel(l2Container, l1Subs, 0);
+    tbody.appendChild(l2Container);
 
     tr.addEventListener('click', function() {{
       var icon = this.querySelector('i');
       var next = this.nextElementSibling;
-      if (next.style.display === 'none') {{
-        next.style.display = '';
-        icon.style.transform = 'rotate(90deg)';
-      }} else {{
-        next.style.display = 'none';
-        icon.style.transform = '';
-      }}
+      var show = next.style.display === 'none';
+      next.style.display = show ? '' : 'none';
+      icon.style.transform = show ? 'rotate(0deg)' : 'rotate(-90deg)';
     }});
-  }});// Dynamic pie charts
-  updatePieChart('rpt-expense-pie', 'expense', extFiltered);
+  }});
+updatePieChart('rpt-expense-pie', 'expense', extFiltered);
   updatePieChart('rpt-income-pie', 'income', extFiltered);
 }}
 
@@ -1542,51 +1623,150 @@ function updateAllCharts(txns) {{
   updateCumulativeNetChart(txns);
 }}
 function updatePieChart(divId, type, txns) {{
+  // Aggregate by category first
   var catData = {{}};
   txns.filter(function(t) {{ return t.type === type; }}).forEach(function(t) {{
     catData[t.category] = (catData[t.category] || 0) + t.amount;
   }});
-  var labels = Object.keys(catData);
-  var values = Object.values(labels.map(function(k) {{ return catData[k]; }}));
-  // Actually get values properly
-  values = labels.map(function(k) {{ return catData[k]; }});
 
+  // L1 aggregation
+  var l1Data = {{}};
+  Object.keys(CAT_HIERARCHY).forEach(function(l1) {{
+    var total = 0;
+    getSubCats(CAT_HIERARCHY[l1].subs).forEach(function(sc) {{
+      total += (catData[sc] || 0);
+    }});
+    if (total > 0) l1Data[l1] = total;
+  }});
+
+  var div = document.getElementById(divId);
+  // Store data for drill-down
+  div._catData = catData;
+  div._l1Data = l1Data;
+  div._type = type;
+  div._drillLevel = 0;
+  div._drillParent = null;
+
+  renderPieLevel(divId, 0, null);
+}}
+
+function renderPieLevel(divId, level, parentCat) {{
+  var div = document.getElementById(divId);
+  var catData = div._catData;
+  var l1Data = div._l1Data;
+  var type = div._type;
   var colors = type === 'expense'
     ? ['#ef4444','#f97316','#f59e0b','#eab308','#84cc16','#22c55e','#10b981','#14b8a6','#06b6d4','#3b82f6','#6366f1','#8b5cf6','#a855f7','#d946ef','#ec4899']
     : ['#10b981','#22c55e','#84cc16','#14b8a6','#06b6d4','#3b82f6','#6366f1','#8b5cf6','#a855f7','#d946ef'];
 
-  var total = values.reduce(function(a,b) {{ return a+b; }}, 0);
+  var labels, values, title;
+  if (level === 0) {{
+    // L1: 固定支出 / 活动支出 / 收入
+    labels = Object.keys(l1Data);
+    values = Object.values(l1Data);
+    title = '支出分类 (点击下钻)';
+  }} else if (level === 1) {{
+    // L2: subcategories of parent
+    var info = CAT_HIERARCHY[parentCat];
+    if (!info) return;
+    var subs = [];
+    info.subs.forEach(function(s) {{
+      if (typeof s === 'string') {{
+        var v = catData[s] || 0;
+        if (v > 0) subs.push({{label: s, value: v, hasSubs: false}});
+      }} else {{
+        var v = 0;
+        getSubCats(s.subs).forEach(function(ss) {{ v += (catData[ss] || 0); }});
+        if (v > 0) subs.push({{label: s.name, value: v, hasSubs: true}});
+      }}
+    }});
+    subs.sort(function(a,b) {{ return b.value - a.value; }});
+    labels = subs.map(function(s) {{ return s.label; }});
+    values = subs.map(function(s) {{ return s.value; }});
+    title = parentCat + ' (点击返回 | 点击子类下钻)';
+  }} else {{
+    // L3: 汽车/交通 subcategories
+    var info3 = null;
+    Object.keys(CAT_HIERARCHY).forEach(function(l1) {{
+      CAT_HIERARCHY[l1].subs.forEach(function(s) {{
+        if (typeof s !== 'string' && s.name === parentCat) info3 = s;
+      }});
+    }});
+    if (!info3) return;
+    var subs3 = [];
+    info3.subs.forEach(function(ss) {{
+      var v = catData[ss] || 0;
+      if (v > 0) subs3.push({{label: ss, value: v}});
+    }});
+    labels = subs3.map(function(s) {{ return s.label; }});
+    values = subs3.map(function(s) {{ return s.value; }});
+    title = parentCat + ' 明细 (点击返回)';
+  }}
 
+  var total = values.reduce(function(a,b) {{ return a+b; }}, 0);
   var data = [{{
-    type: 'pie',
-    labels: labels,
-    values: values,
-    hole: 0.45,
+    type: 'pie', labels: labels, values: values, hole: 0.45,
     textinfo: labels.length <= 8 ? 'label+percent' : 'percent',
     textposition: labels.length <= 8 ? 'auto' : 'outside',
     textfont: {{size: 11}},
     marker: {{colors: colors.slice(0, labels.length)}},
     automargin: true,
+    hoverinfo: 'label+value+percent',
+    hovertemplate: '%{{label}}<br>EUR %{{value:,.2f}} (%{{percent}})<extra></extra>'
   }}];
-
   var layout = {{
-    height: 440,
-    margin: {{l: 20, r: 80, t: 10, b: 20}},
+    height: 440, title: title, titlefont: {{size: 13}},
+    margin: {{l: 20, r: 80, t: 50, b: 20}},
     showlegend: true,
     legend: {{orientation: 'v', y: 0.5, x: 1.05, xanchor: 'left'}},
     template: 'plotly_white',
-    paper_bgcolor: 'rgba(0,0,0,0)',
-    plot_bgcolor: 'rgba(0,0,0,0)',
+    paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
   }};
-
   var config = {{displayModeBar: false, responsive: true}};
 
-  Plotly.react(divId, data, layout, config).then(null, function() {{
-    // If react fails (first render), use newPlot
-    Plotly.newPlot(divId, data, layout, config);
+  var plotDiv = document.getElementById(divId);
+  Plotly.react(divId, data, layout, config).then(function() {{
+    // Wire click for drill-down
+    plotDiv.on('plotly_click', function(eventData) {{
+      var clicked = eventData.points[0];
+      if (!clicked) return;
+      var label = clicked.label;
+      var drillLevel = plotDiv._drillLevel;
+      if (drillLevel === 0) {{
+        // Drilled from L1 to L2
+        plotDiv._drillLevel = 1;
+        plotDiv._drillParent = label;
+        renderPieLevel(divId, 1, label);
+      }} else if (drillLevel === 1) {{
+        // Check if this subcategory has further drill-down
+        var hasSubs = false;
+        Object.keys(CAT_HIERARCHY).forEach(function(l1) {{
+          CAT_HIERARCHY[l1].subs.forEach(function(s) {{
+            if (typeof s !== 'string' && s.name === label) hasSubs = true;
+          }});
+        }});
+        if (hasSubs) {{
+          plotDiv._drillLevel = 2;
+          plotDiv._drillParent = label;
+          renderPieLevel(divId, 2, label);
+        }}
+      }} else {{
+        // L3 → back to L1
+        plotDiv._drillLevel = 0;
+        plotDiv._drillParent = null;
+        renderPieLevel(divId, 0, null);
+      }}
+    }});
+    // Double-click to go back
+    plotDiv.on('plotly_doubleclick', function() {{
+      if (plotDiv._drillLevel > 0) {{
+        plotDiv._drillLevel = 0;
+        plotDiv._drillParent = null;
+        renderPieLevel(divId, 0, null);
+      }}
+    }});
   }});
 }}
-
 // Wire report filters
 document.getElementById('report-account').addEventListener('change', function() {{
   updateReport();
