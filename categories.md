@@ -20,6 +20,7 @@
 | 电费 | E.ON Energie, Stadtwerke Göttingen | 电力和市政 |
 | 广电费 | Rundfunk ARD | 德国强制电视广播费 |
 | 网费 | Telekom Deutschland | 手机和宽带 |
+| 话费 | Vodafone | 手机话费 |
 | 健康保险 | Techniker Krankenkasse | 公立医保 |
 | 其他保险 | GOTHAER ALLGEMEINE, HANSEMERKUR, SIGNAL IDUNA | 第三方责任险等 |
 | 车险 | Volkswagen Autoversicherung, HUK-COBURG, Sparkassen DirektVersicherung | 汽车保险 |
@@ -39,11 +40,11 @@
 | 线下购物 | OBI, IKEA, PRIMARK, DOUGLAS, TEGUT, MIX MARKT | 实体店消费 |
 | 餐饮外食 | KFC, MCDONALD, BURGER KING, UBER EATS, LIEFERANDO, TANIA MOHAMED, UMG GASTRONOMIE, CAFE, LUTZ MICHAEL, ROXX, DOOBOO THE GLEN, ChiliChillen Hotpot, Eiscafe, SPC.Mamame, COCO TEA FRESH, PAMPAS GENT, THE OLIVE STREETFOOD, PAVILLON STADT | 外食和外卖 |
 | 汽车/交通 | 见下方三级分类 | 所有交通相关支出 |
-| 宠物 | FRESSNAPF, ZOOPLUS, TIERARZT, TIERAERZTLICHES, DR. MED. VET. WYSTUB | 兽医和粮食 |
+| 宠物 | FRESSNAPF, ZOOPLUS, ZOOROYAL, TIERARZT, TIERAERZTLICHES, DR. MED. VET. WYSTUB | 兽医和粮食 |
 | 医疗 | APOTHEKE, KRANKENHAUS, SANITATSHAUS, DRK, ARBEITER-SAMARITER | 药房和医疗自费 |
 | 旅行 | BOOKING, AIRBNB, LUFTHANSA, HOLIDAY INN, CHECK24, GOODMORNINGBERLIN, PREUSS.SCHLOSSER, Hamb. Elbphilharmonie | 酒店和出行 |
 | 服饰 | LULULEMON, ZALANDO, PRIMARK, UNIQLO, 优衣库, 宜家 | 衣物 |
-| 娱乐 | NETFLIX, SPOTIFY | 流媒体订阅 |
+| 娱乐 | NETFLIX, SPOTIFY, CINEMAXX | 流媒体和影院 |
 | 学费 | Georg-August-Universitat, UMG, Gottingen Stiftung | 大学相关扣款 |
 | 市政缴费 | Stadt Goettingen, STADT GOETTINGEN, Buergerbuero, Generalkon. der VR China | 市政和官方缴费 |
 | 网上充值 | Google CLOUD, APPLE.COM/BILL | 云服务和订阅 |
