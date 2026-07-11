@@ -30,6 +30,13 @@ PDF_DIR = SCRIPT_DIR / "银行流水"
 CACHE_FILE = SCRIPT_DIR / "bank_transactions.json"
 OUTPUT_FILE = SCRIPT_DIR / "bank_summary_2025.html"
 
+# ── 自有 IBAN（用于识别账户间内部转账）──────────────────────────────────────
+OWN_IBANS = {
+    "DE64290700240344376900",  # DB
+    "DE79100123455797203011",  # MY-TR
+    "DE08100123456340785111",  # WIFE-TR
+}
+
 # ── 分类规则 (从 记账.html 移植) ─────────────────────────────────────────────
 
 CATEGORY_RULES = [
@@ -328,6 +335,67 @@ def parse_account_statement_format(text: str) -> list[dict]:
     return transactions
 
 
+# ═══════════════════════════════════════════════════════════════════════════════
+# CSV 解析器: Trade Republic 导出
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def parse_trade_republic_csv(csv_path: Path) -> list[dict]:
+    """解析 Trade Republic CSV → 统一交易格式。只提取 CASH 交易。"""
+    import csv as _csv
+    txns = []
+    with open(csv_path, 'r', encoding='utf-8') as f:
+        reader = _csv.DictReader(f)
+        for row in reader:
+            cat = row.get('category', '')
+            if cat != 'CASH':
+                continue  # 跳过 TRADING（投资交易）
+
+            amt_str = row.get('amount', '0').strip()
+            try:
+                amount = float(amt_str)
+            except ValueError:
+                continue
+
+            booking_date = row.get('date', '')[:10]  # YYYY-MM-DD
+            merchant = row.get('name', '').strip()
+            description = row.get('description', '').strip()
+            txn_type = row.get('type', '').strip()
+            cparty_iban = row.get('counterparty_iban', '').strip()
+
+            # 检测内部转账
+            is_internal = (
+                'TRANSFER' in txn_type and
+                cparty_iban in OWN_IBANS
+            )
+
+            txns.append({
+                "booking_date": booking_date,
+                "value_date": booking_date,
+                "amount": amount,
+                "type": txn_type,
+                "merchant": merchant,
+                "details": description,
+                "source_fmt": "tr_csv",
+                "account": "TR",
+                "is_internal_transfer": is_internal,
+            })
+    return txns
+
+
+def detect_internal_transfers(all_txns: list[dict]) -> None:
+    """标记 PDF 侧的内部转账（通过 IBAN 匹配）。"""
+    # 从已有交易的 details 中提取 IBAN
+    iban_re = re.compile(r'DE\d{20}')
+    for t in all_txns:
+        if t.get('is_internal_transfer'):
+            continue
+        # 检查 details 中的 IBAN
+        details = t.get('details', '')
+        ibans = iban_re.findall(details)
+        if any(iban in OWN_IBANS for iban in ibans):
+            t['is_internal_transfer'] = True
+
+
 def extract_merchant_f2(type_line: str, merchant_lines: list[str]) -> str:
     """从类型行和后续行提取商户名."""
     prefixes = [
@@ -581,20 +649,26 @@ def build_report(transactions: list[dict]) -> str:
     import json as _json
     txns_json = _json.dumps(txns, ensure_ascii=False, default=str)
 
-    # ── 统计卡片 ──
-    total_in = sum(t['amount'] for t in txns if t['amount'] > 0)
-    total_out = abs(sum(t['amount'] for t in txns if t['amount'] < 0))
+    # ── 统计卡片（排除内部转账）──
+    ext_txns = [t for t in txns if not t.get('is_internal_transfer')]
+    total_in = sum(t['amount'] for t in ext_txns if t['amount'] > 0)
+    total_out = abs(sum(t['amount'] for t in ext_txns if t['amount'] < 0))
     net = total_in - total_out
     date_range = f"{txns[0]['booking_date']} ~ {txns[-1]['booking_date']}"
     avg_monthly = total_out / len(month_keys) if month_keys else 0
+    total_count = len(txns)
 
     # ── 交易明细表行 ──
     table_rows = []
+    accounts = sorted(set(t.get('account', 'DB') for t in txns))
     for t in reversed(txns):
         css = 'inc' if t['amount'] > 0 else 'exp'
+        if t.get('is_internal_transfer'):
+            css += ' internal'
         cat = t.get('category', '其他')
+        acct = t.get('account', 'DB')
         table_rows.append(
-            f'<tr class="{css}" data-category="{cat}">'
+            f'<tr class="{css}" data-category="{cat}" data-account="{acct}" data-internal="{1 if t.get("is_internal_transfer") else 0}">'
             f'<td>{t["booking_date"]}</td>'
             f'<td>{t.get("merchant","")[:55]}</td>'
             f'<td><span class="tag">{cat}</span></td>'
@@ -832,6 +906,7 @@ thead th .sort-arrow{{font-size:.7rem;margin-left:3px;opacity:.4}}
 thead th.sorted .sort-arrow{{opacity:1}}
 tbody td{{padding:8px 12px;border-bottom:1px solid var(--border)}}
 tr.hidden{{display:none}}
+tr.internal td{{color:var(--text2);font-style:italic}}
 tr:hover td{{background:#f8fafc}}
 .amt{{text-align:right;font-weight:600;font-variant-numeric:tabular-nums}}
 tr.inc .amt{{color:var(--green)}}tr.exp .amt{{color:var(--red)}}
@@ -880,7 +955,7 @@ tr.inc .amt{{color:var(--green)}}tr.exp .amt{{color:var(--red)}}
 
 <div class="header">
 <h1>银行账单总结</h1>
-<p class="sub">{date_range} · 共 {len(txns)} 笔交易 · 月均支出 €{avg_monthly:,.2f}</p>
+<p class="sub">{date_range} · 共 {total_count} 笔交易 · 月均支出 €{avg_monthly:,.2f}</p>
 </div>
 
 <nav class="tabs">
@@ -895,6 +970,12 @@ tr.inc .amt{{color:var(--green)}}tr.exp .amt{{color:var(--red)}}
 <div class="card" style="margin-bottom:20px">
 <h2 style="margin-bottom:16px">数据筛选</h2>
 <div class="filter-grid">
+<div class="filter-item">
+<label>账户</label>
+<select id="report-account"><option value="all">全部账户</option>
+{"".join(f'<option value="{a}">{a}</option>' for a in accounts)}
+</select>
+</div>
 <div class="filter-item">
 <label>年份</label>
 <select id="report-year"><option value="all">全部年份</option>
@@ -996,10 +1077,10 @@ tr.inc .amt{{color:var(--green)}}tr.exp .amt{{color:var(--red)}}
 <input type="text" id="searchInput" placeholder="搜索商户 / 分类…" autocomplete="off">
 <button class="search-clear" id="searchClear" title="清除">&times;</button>
 </div>
-<span class="tbl-count" id="tblCount">{len(txns)} / {len(txns)} 条记录</span>
+<span class="tbl-count" id="tblCount">{total_count} / {total_count} 条记录</span>
 </div>
 <div class="top-cats" id="catFilters">
-<button class="active" data-cat="">全部分类 ({len(txns)})</button>
+<button class="active" data-cat="">全部分类 ({total_count})</button>
 {"".join(f'<button data-cat="{c}">{c} ({n})</button>' for c,n in top_cats)}
 </div>
 <div class="tbl-wrap"><table>
@@ -1112,6 +1193,8 @@ var transactions = RAW_TRANSACTIONS.map(function(t) {{
     amount: Math.abs(t.amount),
     merchant: t.merchant || '',
     description: t.merchant || '',
+    account: t.account || 'DB',
+    isInternal: t.is_internal_transfer || false,
   }};
 }});
 
@@ -1213,6 +1296,7 @@ function applyFilters(){{
 }}
 /* ── Report view update ── */
 function updateReport() {{
+  var account = document.getElementById('report-account').value;
   var year = document.getElementById('report-year').value;
   var month = document.getElementById('report-month').value;
   var cat = document.getElementById('report-category').value;
@@ -1221,6 +1305,7 @@ function updateReport() {{
   var amtMax = parseFloat(document.getElementById('report-amt-max').value) || Infinity;
 
   var filtered = transactions.filter(function(t) {{
+    if (account !== 'all' && t.account !== account) return false;
     if (year !== 'all' && t.date.substring(0,4) !== year) return false;
     if (month !== 'all' && t.date.substring(0,7) !== month) return false;
     if (cat !== 'all' && t.category !== cat) return false;
@@ -1229,10 +1314,12 @@ function updateReport() {{
     return true;
   }});
 
+  // 排除内部转账
+  var extFiltered = filtered.filter(function(t) {{ return !t.isInternal; }});
   var totalIn = 0, totalOut = 0;
   var catTotals = {{}};
   var catCounts = {{}};
-  filtered.forEach(function(t) {{
+  extFiltered.forEach(function(t) {{
     if (t.type === 'income') {{ totalIn += t.amount; }}
     else {{ totalOut += t.amount; }}
     catTotals[t.category] = (catTotals[t.category] || 0) + t.amount;
@@ -1264,6 +1351,7 @@ function updateReport() {{
 }}
 
 // Wire report filters
+document.getElementById('report-account').addEventListener('change', updateReport);
 document.getElementById('report-year').addEventListener('change', function() {{
   updateReport();
   updateYearlyStats();
@@ -1660,7 +1748,28 @@ def main():
                 txns = []
 
             print(f"  -> 提取 {len(txns)} 笔交易 (格式: {fmt})")
+            # 标记账户来源
+            for t in txns:
+                t['account'] = 'DB'
+                t['is_internal_transfer'] = False
             all_txns.extend(txns)
+
+        # 解析 Trade Republic CSV（所有 .csv 文件）
+        for csv_path in sorted(PDF_DIR.glob("*.csv")):
+            print(f"-> 解析 {csv_path.name}...")
+            tr_txns = parse_trade_republic_csv(csv_path)
+            # 根据文件名区分账户：含 -cr 的是老婆，其余是自己的 TR
+            if '-cr' in csv_path.stem:
+                acct = 'WIFE'
+            else:
+                acct = 'TR'
+            for t in tr_txns:
+                t['account'] = acct
+            print(f"  -> 提取 {len(tr_txns)} 笔 CASH 交易 ({acct})")
+            all_txns.extend(tr_txns)
+
+        # 检测 PDF 侧的内部转账
+        detect_internal_transfers(all_txns)
 
         # 后处理：清洗商户名 + 去重
         all_txns = post_process(all_txns)
@@ -1671,7 +1780,8 @@ def main():
 
         # 存缓存
         save_cache(all_txns)
-        print(f"[OK] 缓存已保存 ({len(all_txns)} 笔)")
+        internal_count = sum(1 for t in all_txns if t.get('is_internal_transfer'))
+        print(f"[OK] 缓存已保存 ({len(all_txns)} 笔，其中 {internal_count} 笔内部转账)")
 
     # 按月份筛选
     if args.month:
