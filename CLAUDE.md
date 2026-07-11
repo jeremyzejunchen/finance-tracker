@@ -37,7 +37,7 @@ parse_bank_pdfs.py              ← 主脚本。所有 HTML/CSS/JS 都在 build_
   ├── build_report()             → 生成 bank_summary_2025.html（所有 UI 在此）
   └── post_process()             → 商户名清洗 + 去重
 
-bank_transactions.json           ← 缓存（935 笔交易）。--force 或 PDF 变动时删除重建
+bank_transactions.json           ← 缓存（932 笔交易）。--force 或 PDF 变动时删除重建
 bank_summary_2025.html           ← 生成的输出（~5MB，Plotly.js 内嵌 + JSON 数据内嵌）
 
 银行流水/*.pdf                   ← 源 PDF 银行流水（18 个文件，2025 年 1 月 ~ 2026 年 6 月）
@@ -100,10 +100,13 @@ PDF 文本提取（PyMuPDF）
 
 PayPal CSV 匹配逻辑：
 - PayPal 真实交易（排除 Bank Deposit/Withdrawal/Authorization/Card Deposit）
-- 按金额 + 日期（±5 天）匹配银行 PayPal SEPA 交易
+- 第一轮：按 Gross 金额 + 日期（±5 天）匹配银行 PayPal SEPA 交易
 - 匹配成功 → 用 PayPal 商户名替换银行 "PayPal Europe" 条目
 - PayPal 收入匹配银行 PAYPAL 收入 → 标记银行为内部转账（提现）
-- 未匹配 → 作为新交易添加到数据中
+- 第二轮（Balance 匹配）：Gross 未匹配的 Debit 交易，若 Balance ≠ Gross，
+  用 Balance 金额匹配银行 PAYPAL 交易（部分余额支付场景）
+  - 匹配成功 → 银行条目金额更新为 PayPal 全额，附注 Bankeinzug + Guthaben 明细
+- 仍未匹配 → 作为新交易添加到数据中
 
 缓存失效条件：`--force` 或 PDF 数量变化或任意 PDF 修改时间晚于缓存。
 
@@ -138,3 +141,20 @@ PayPal CSV 匹配逻辑：
 - `bank_summary_2025.html` 由 `parse_bank_pdfs.py` 生成。快速调试可以直接改 HTML，最终改动回归 Python 脚本。
 - NAS 路径（`\\fritz.box\FRITZ.NAS\Jeremy_4T\记账`）是标准位置。
 - `记账导出数据/` 中的 CSV 是 UTF-16LE 编码的鲨鱼记账 App 导出文件，不在当前流水线中使用。
+
+## 当前状态（2026-07-11）
+
+- **交易总数**：932 笔（含 48 笔内部转账，实际 884 笔有效交易）
+- **总收入**：EUR 209,789.36 | **总支出**：EUR 161,876.41 | **净额**：EUR +47,912.95
+- **PDF**：18 个文件（2025-01 ~ 2026-06）
+- **CSV**：Trade Republic ME + WIFE 各一，PayPal ME (英文/有 Balance 字段) + WIFE (德文/无 Balance 字段)
+- **最近改动**：PayPal Balance 匹配（部分余额支付场景），减少 3 笔重复
+
+## PayPal CSV 数据结构
+
+ME 账户 (Paypal-*-czj.CSV, 英文)：
+- `Gross`：交易总额 | `Balance`：交易后 PayPal 余额
+- 当 `Balance < 0`（借记交易后余额为负）→ 实际银行扣款 = `abs(Balance)`，其余来自 PayPal 余额
+- 当 `Balance ≥ 0` → 全额来自 PayPal 余额，无银行扣款
+
+WIFE 账户 (Paypal-*-cr.CSV, 德文)：无 Balance 列。

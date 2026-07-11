@@ -521,6 +521,13 @@ def parse_paypal_csv(csv_path: Path) -> list[dict]:
             elif impact in credit_impacts:
                 impact = 'Credit'
 
+            # 解析 Balance 字段（实际银行扣款金额，可能与 Gross 不同）
+            # 当 Balance ≠ Gross 时，差额来自 PayPal 余额支付
+            balance_str = row.get('Balance', '').strip()
+            _pp_balance = None
+            if balance_str:
+                _pp_balance = parse_amount_f2(balance_str)
+
             # 构建详情
             details_parts = []
             if item_title:
@@ -542,6 +549,7 @@ def parse_paypal_csv(csv_path: Path) -> list[dict]:
                 'is_internal_transfer': False,
                 '_pp_txn_id': txn_id,
                 '_pp_impact': impact,
+                '_pp_balance': _pp_balance,
             })
     return txns
 
@@ -613,6 +621,8 @@ def match_paypal_to_bank(pp_txns: list[dict], bank_txns: list[dict]) -> tuple[li
                 pt_copy = dict(pt)
                 del pt_copy['_pp_txn_id']
                 del pt_copy['_pp_impact']
+                if '_pp_balance' in pt_copy:
+                    del pt_copy['_pp_balance']
                 pt_copy['is_internal_transfer'] = False
                 new_txns.append(pt_copy)
             elif pp_impact == 'Debit' and 'PAYPAL' in bank_merchant_upper:
@@ -637,13 +647,49 @@ def match_paypal_to_bank(pp_txns: list[dict], bank_txns: list[dict]) -> tuple[li
                 pt_copy = dict(pt)
                 del pt_copy['_pp_txn_id']
                 del pt_copy['_pp_impact']
+                if '_pp_balance' in pt_copy:
+                    del pt_copy['_pp_balance']
                 new_txns.append(pt_copy)
         else:
-            # 未匹配 → 作为新交易添加
-            pt_copy = dict(pt)
-            del pt_copy['_pp_txn_id']
-            del pt_copy['_pp_impact']
-            new_txns.append(pt_copy)
+            # 未按 Gross 金额匹配 → 尝试 Balance 匹配
+            # 当部分金额来自 PayPal 余额时，银行扣款 (Balance) < 交易总额 (Gross)
+            pp_balance = pt.get('_pp_balance')
+            balance_matched = False
+            if pp_impact == 'Debit' and pp_balance is not None and pp_balance != 0:
+                abs_bal = round(abs(pp_balance), 2)
+                if abs(abs_bal - abs_amt) >= 0.02:  # Balance 与 Gross 不同，才需要二次匹配
+                    bal_candidates = bank_by_abs_amt.get(abs_bal, [])
+                    for bi in bal_candidates:
+                        if bi in matched_bank_indices:
+                            continue
+                        bt = bank_txns[bi]
+                        if 'PAYPAL' not in bt.get('merchant', '').upper():
+                            continue
+                        try:
+                            bd = datetime.strptime(bt['booking_date'], '%Y-%m-%d')
+                            pd = datetime.strptime(pp_date, '%Y-%m-%d')
+                        except ValueError:
+                            continue
+                        if abs((bd - pd).days) <= 5:
+                            # Balance 匹配成功！
+                            # 银行扣款是 PayPal 交易的资金来源之一（其余来自余额）
+                            matched_bank_indices.add(bi)
+                            bt['merchant'] = pp_merchant
+                            bt['amount'] = pp_amt  # 使用 PayPal 完整交易金额
+                            bt['details'] = bt.get('details', '') + '\n[PayPal] ' + pt.get('details', '')
+                            bt['details'] += f'\n[PayPal] Bankeinzug {abs_bal:.2f} EUR (Gesamt {abs_amt:.2f} EUR, {abs_amt - abs_bal:.2f} EUR per Guthaben)'
+                            bt['_paypal_enhanced'] = True
+                            balance_matched = True
+                            break
+
+            if not balance_matched:
+                # 仍未匹配 → 作为新交易添加
+                pt_copy = dict(pt)
+                del pt_copy['_pp_txn_id']
+                del pt_copy['_pp_impact']
+                if '_pp_balance' in pt_copy:
+                    del pt_copy['_pp_balance']
+                new_txns.append(pt_copy)
 
     return new_txns, matched_bank_indices
 
