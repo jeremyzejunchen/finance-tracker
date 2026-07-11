@@ -961,6 +961,7 @@ tr.inc .amt{{color:var(--green)}}tr.exp .amt{{color:var(--red)}}
 <nav class="tabs">
 <button class="active" data-tab="tab-report">报表</button>
 <button data-tab="tab-charts">图表</button>
+<button data-tab="tab-yearly">年度</button>
 <button data-tab="tab-settings">设置</button>
 </nav>
 
@@ -985,7 +986,7 @@ tr.inc .amt{{color:var(--green)}}tr.exp .amt{{color:var(--red)}}
 <div class="filter-item">
 <label>月份</label>
 <select id="report-month"><option value="all">全部月份</option>
-{"".join(f'<option value="{m}">{m}</option>' for m in month_keys)}
+{"".join(f'<option value="{m}" data-year="{m[:4]}">{m}</option>' for m in month_keys)}
 </select>
 </div>
 <div class="filter-item">
@@ -1016,12 +1017,6 @@ tr.inc .amt{{color:var(--green)}}tr.exp .amt{{color:var(--red)}}
 <div class="kpi-count"><div class="lbl">交易笔数</div><div class="val" id="rpt-count">{len(txns)}</div></div>
 </div>
 
-<!-- 饼图（JS 动态渲染，跟随筛选联动）-->
-<div class="charts-grid">
-<div class="card"><h2>支出分类占比</h2><div id="rpt-expense-pie" style="height:440px"></div></div>
-<div class="card"><h2>收入分类占比</h2><div id="rpt-income-pie" style="height:440px"></div></div>
-</div>
-
 <!-- 分类明细表 -->
 <div class="card">
 <h2>分类明细</h2>
@@ -1033,40 +1028,10 @@ tr.inc .amt{{color:var(--green)}}tr.exp .amt{{color:var(--red)}}
 </table></div>
 </div>
 
-<!-- 年度趋势图（每年一张） -->
-<div class="card" style="margin-top:20px"><h2>年度收支趋势</h2>
-{"".join(f'<div class="yearly-chart" data-year="{y}" style="display:none">{to_html(fig, include_plotlyjs=False, full_html=False)}</div>' for y, fig in yearly_charts.items())}
-</div>
-
-<!-- 年度统计 -->
-<div class="card" style="margin-top:20px">
-<h2>年度汇总统计</h2>
-<div class="kpi" id="yearly-kpi">
-<div class="kpi-in"><div class="lbl">年度总收入</div><div class="val in" id="yr-income">€{total_in:,.2f}</div></div>
-<div class="kpi-out"><div class="lbl">年度总支出</div><div class="val out" id="yr-expense">€{total_out:,.2f}</div></div>
-<div class="kpi-net"><div class="lbl">年度净额</div><div class="val net" id="yr-balance">€{net:+,.2f}</div></div>
-</div>
-
-<div class="charts-grid" style="margin-top:16px">
-<div>
-<h3 style="font-size:.9rem;margin-bottom:12px;color:var(--text2)">支出分类占比</h3>
-<table class="detail-table"><thead><tr>
-<th>分类</th><th style="text-align:right">金额</th><th style="text-align:right">占比</th>
-</tr></thead><tbody id="yr-exp-detail"></tbody></table>
-</div>
-<div>
-<h3 style="font-size:.9rem;margin-bottom:12px;color:var(--text2)">收入分类占比</h3>
-<table class="detail-table"><thead><tr>
-<th>分类</th><th style="text-align:right">金额</th><th style="text-align:right">占比</th>
-</tr></thead><tbody id="yr-inc-detail"></tbody></table>
-</div>
-</div>
-
-<!-- 月度对比表 -->
-<h3 style="font-size:.9rem;margin:20px 0 12px;color:var(--text2)">月度收支对比</h3>
-<table class="detail-table"><thead><tr>
-<th>月份</th><th style="text-align:right">收入</th><th style="text-align:right">支出</th><th style="text-align:right">结余</th>
-</tr></thead><tbody id="yr-monthly-detail"></tbody></table>
+<!-- 饼图（JS 动态渲染，跟随筛选联动）-->
+<div class="charts-grid">
+<div class="card"><h2>支出分类占比</h2><div id="rpt-expense-pie" style="height:440px"></div></div>
+<div class="card"><h2>收入分类占比</h2><div id="rpt-income-pie" style="height:440px"></div></div>
 </div>
 
 <!-- 交易表 -->
@@ -1106,6 +1071,47 @@ tr.inc .amt{{color:var(--green)}}tr.exp .amt{{color:var(--red)}}
 </div>
 
 </div><!-- /tab-charts -->
+</div><!-- /tab-charts -->
+
+<div id="tab-yearly" class="tab-content">
+<!-- 年度趋势图（每年一张） -->
+<div class="card" style="margin-top:20px"><h2>年度收支趋势</h2>
+{"".join(f'<div class="yearly-chart" data-year="{y}" style="display:none">{to_html(fig, include_plotlyjs=False, full_html=False)}</div>' for y, fig in yearly_charts.items())}
+</div>
+
+<!-- 年度统计 -->
+<div class="card" style="margin-top:20px">
+<h2>年度汇总统计</h2>
+<div class="kpi" id="yearly-kpi">
+<div class="kpi-in"><div class="lbl">年度总收入</div><div class="val in" id="yr-income">€{total_in:,.2f}</div></div>
+<div class="kpi-out"><div class="lbl">年度总支出</div><div class="val out" id="yr-expense">€{total_out:,.2f}</div></div>
+<div class="kpi-net"><div class="lbl">年度净额</div><div class="val net" id="yr-balance">€{net:+,.2f}</div></div>
+</div>
+
+<div class="charts-grid" style="margin-top:16px">
+<div>
+<h3 style="font-size:.9rem;margin-bottom:12px;color:var(--text2)">支出分类占比</h3>
+<table class="detail-table"><thead><tr>
+<th>分类</th><th style="text-align:right">金额</th><th style="text-align:right">占比</th>
+</tr></thead><tbody id="yr-exp-detail"></tbody></table>
+</div>
+<div>
+<h3 style="font-size:.9rem;margin-bottom:12px;color:var(--text2)">收入分类占比</h3>
+<table class="detail-table"><thead><tr>
+<th>分类</th><th style="text-align:right">金额</th><th style="text-align:right">占比</th>
+</tr></thead><tbody id="yr-inc-detail"></tbody></table>
+</div>
+</div>
+
+<!-- 月度对比表 -->
+<h3 style="font-size:.9rem;margin:20px 0 12px;color:var(--text2)">月度收支对比</h3>
+<table class="detail-table"><thead><tr>
+<th>月份</th><th style="text-align:right">收入</th><th style="text-align:right">支出</th><th style="text-align:right">结余</th>
+</tr></thead><tbody id="yr-monthly-detail"></tbody></table>
+</div>
+
+
+</div><!-- /tab-yearly -->
 
 <div id="tab-settings" class="tab-content">
 
@@ -1335,7 +1341,7 @@ function updateReport() {{
   balEl.textContent = '€' + (bal >= 0 ? '+' : '') + bal.toFixed(2);
   document.getElementById('rpt-count').textContent = filtered.length;
 
-  // Category detail table
+  // Category detail table (expandable)
   var totalExpense = totalOut;
   var tbody = document.getElementById('rpt-expense-detail');
   tbody.innerHTML = '';
@@ -1343,15 +1349,42 @@ function updateReport() {{
   sorted.forEach(function(cat) {{
     var amt = catTotals[cat];
     var pct = totalExpense > 0 ? (amt / totalExpense * 100).toFixed(1) : '0.0';
+    var catTxns = filtered.filter(function(t) {{ return t.category === cat && t.type === 'expense'; }})
+                         .sort(function(a,b) {{ return b.date.localeCompare(a.date); }});
     var tr = document.createElement('tr');
-    tr.innerHTML = '<td>' + cat + '</td>' +
-      '<td style="text-align:right;color:var(--red);font-weight:600">€' + amt.toFixed(2) + '</td>' +
+    tr.className = 'cat-expand-row';
+    tr.style.cursor = 'pointer';
+    tr.innerHTML = '<td><i class="fas fa-chevron-right" style="font-size:.7rem;margin-right:6px;transition:transform .2s"></i>' + cat + '</td>' +
+      '<td style="text-align:right;color:var(--red);font-weight:600">' + '€'.encode().decode('unicode-escape') + amt.toFixed(2) + '</td>' +
       '<td style="text-align:right">' + pct + '%</td>' +
       '<td style="text-align:right">' + (catCounts[cat] || 0) + '</td>';
     tbody.appendChild(tr);
-  }});
 
-  // Dynamic pie charts
+    var subRow = document.createElement('tr');
+    subRow.className = 'cat-sub-row';
+    subRow.style.display = 'none';
+    var subHtml = '<td colspan="4" style="padding:0"><div style="padding:4px 20px 8px;font-size:.82rem">';
+    catTxns.forEach(function(t) {{
+      subHtml += '<div style="display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px solid var(--border)">' +
+        '<span>' + t.date + ' <span style="color:var(--text2)">' + (t.merchant || t.description).substring(0,40) + '</span></span>' +
+        '<span style="color:var(--red);font-weight:500">' + '€'.encode().decode('unicode-escape') + '-' + t.amount.toFixed(2) + '</span></div>';
+    }});
+    subHtml += '</div></td>';
+    subRow.innerHTML = subHtml;
+    tbody.appendChild(subRow);
+
+    tr.addEventListener('click', function() {{
+      var icon = this.querySelector('i');
+      var next = this.nextElementSibling;
+      if (next.style.display === 'none') {{
+        next.style.display = '';
+        icon.style.transform = 'rotate(90deg)';
+      }} else {{
+        next.style.display = 'none';
+        icon.style.transform = '';
+      }}
+    }});
+  }});// Dynamic pie charts
   updatePieChart('rpt-expense-pie', 'expense', extFiltered);
   updatePieChart('rpt-income-pie', 'income', extFiltered);
 }}
@@ -1411,8 +1444,17 @@ document.getElementById('report-account').addEventListener('change', function() 
 document.getElementById('report-year').addEventListener('change', function() {{
   updateReport();
   updateYearlyStats();
-  // 切换年度趋势图
   var yr = this.value;
+  // 筛选月份下拉
+  var monthSel = document.getElementById('report-month');
+  Array.from(monthSel.options).forEach(function(opt) {{
+    if (opt.value === 'all') return;
+    opt.style.display = (yr === 'all' || opt.dataset.year === yr) ? '' : 'none';
+  }});
+  if (yr !== 'all' && monthSel.value !== 'all' && monthSel.value.substring(0,4) !== yr) {{
+    monthSel.value = 'all';
+  }}
+  // 切换年度趋势图
   document.querySelectorAll('.yearly-chart').forEach(function(el) {{
     el.style.display = (yr === 'all' || el.dataset.year === yr) ? 'block' : 'none';
   }});
