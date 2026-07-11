@@ -98,6 +98,14 @@ PDF 文本提取（PyMuPDF）
 
 只上传代码，不提交数据文件（PDF 银行流水、CSV 导出、缓存、生成的 HTML）。
 
+## 验证规则
+
+每次代码改动完成后，必须用 Playwright 自动检查网页：
+1. `python parse_bank_pdfs.py` 重新生成 HTML
+2. 启动 `python -m http.server` 本地服务器
+3. 用 Playwright 打开页面，确认零 JS 错误
+4. 测试关键功能：筛选器联动、页签切换、分类展开、交易表过滤
+
 ## 工作约定
 
 - `bank_summary_2025.html` 由 `parse_bank_pdfs.py` 生成。快速调试可以直接改 HTML，最终改动回归 Python 脚本。
