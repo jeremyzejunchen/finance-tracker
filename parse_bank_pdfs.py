@@ -1155,6 +1155,14 @@ main{{max-width:1280px;margin:0 auto}}
 .top-cats button:hover{{background:#eef2ff;color:var(--accent);border-color:var(--accent2)}}
 .top-cats button.active{{background:var(--accent);color:#fff;border-color:var(--accent)}}
 
+/* Pie chart back button */
+.pie-back-btn{{
+  display:inline-block;margin-bottom:8px;padding:4px 12px;
+  background:var(--surface);color:var(--accent);border:1px solid var(--border);
+  border-radius:6px;cursor:pointer;font-size:.8rem;transition:background .15s;
+}}
+.pie-back-btn:hover{{background:var(--accent);color:#fff;border-color:var(--accent)}}
+
 /* ═══════════════════════════════════════════════════════════════════════════
    Table
    ═══════════════════════════════════════════════════════════════════════════ */
@@ -1320,8 +1328,8 @@ tr.inc .amt{{color:var(--green)}}tr.exp .amt{{color:var(--red)}}
 
 <!-- 饼图（JS 动态渲染，跟随筛选联动）-->
 <div class="charts-grid">
-<div class="card"><h2>支出分类占比</h2><div id="rpt-expense-pie" style="height:440px"></div></div>
-<div class="card"><h2>收入分类占比</h2><div id="rpt-income-pie" style="height:440px"></div></div>
+<div class="card"><h2>支出分类占比</h2><button id="rpt-expense-pie-back" class="pie-back-btn" style="display:none" title="返回上一级">&larr; 返回上一级</button><div id="rpt-expense-pie" style="height:440px"></div></div>
+<div class="card"><h2>收入分类占比</h2><button id="rpt-income-pie-back" class="pie-back-btn" style="display:none" title="返回上一级">&larr; 返回上一级</button><div id="rpt-income-pie" style="height:440px"></div></div>
 </div>
 
 <!-- 交易表 -->
@@ -1740,14 +1748,14 @@ function updateReport() {{
     tr.className = 'cat-l1-row';
     tr.style.cursor = 'pointer';
     tr.style.cssText = 'background:var(--bg);font-weight:700;border-top:2px solid var(--border)';
-    tr.innerHTML = '<td><i class=\"fas fa-chevron-down\" style=\"font-size:.7rem;margin-right:6px;transition:transform .2s\"></i>' + l1 + '</td>' +
+    tr.innerHTML = '<td><i class=\"fas fa-chevron-right\" style=\"font-size:.7rem;margin-right:6px;transition:transform .2s\"></i>' + l1 + '</td>' +
       '<td style=\"text-align:right;color:var(--red);font-weight:700\">EUR ' + l1Total.toFixed(2) + '</td>' +
       '<td style=\"text-align:right\">' + (totalExpense > 0 ? (l1Total/totalExpense*100).toFixed(1) : '0') + '%</td>' +
       '<td style=\"text-align:right\">' + l1Cnt + '</td>';
     tbody.appendChild(tr);
 
     var l2Container = document.createElement('tbody');
-    l2Container.style.display = '';
+    l2Container.style.display = 'none';
     renderLevel(l2Container, l1Subs, 0);
     tbody.appendChild(l2Container);
 
@@ -1756,7 +1764,7 @@ function updateReport() {{
       var next = this.nextElementSibling;
       var show = next.style.display === 'none';
       next.style.display = show ? '' : 'none';
-      icon.style.transform = show ? 'rotate(0deg)' : 'rotate(-90deg)';
+      icon.style.transform = show ? 'rotate(90deg)' : 'rotate(0deg)';
     }});
   }});
 updatePieChart('rpt-expense-pie', 'expense', extFiltered);
@@ -1884,10 +1892,25 @@ function updatePieChart(divId, type, txns) {{
   div._drillParent = null;
 
   renderPieLevel(divId, 0, null);
+
+  // Wire back button
+  var backBtn = document.getElementById(divId + '-back');
+  if (backBtn) {{
+    backBtn.onclick = function() {{
+      var plotDiv = document.getElementById(divId);
+      plotDiv._drillLevel = 0;
+      plotDiv._drillParent = null;
+      renderPieLevel(divId, 0, null);
+    }};
+  }}
 }}
 
 function renderPieLevel(divId, level, parentCat) {{
   var div = document.getElementById(divId);
+  var backBtn = document.getElementById(divId + '-back');
+  if (backBtn) {{
+    backBtn.style.display = level > 0 ? 'inline-block' : 'none';
+  }}
   var catData = div._catData;
   var l1Data = div._l1Data;
   var type = div._type;
@@ -1900,7 +1923,7 @@ function renderPieLevel(divId, level, parentCat) {{
     // L1: 固定支出 / 活动支出 / 收入
     labels = Object.keys(l1Data);
     values = Object.values(l1Data);
-    title = '支出分类 (点击下钻)';
+    title = type === 'expense' ? '支出分类 (点击下钻)' : '收入分类 (点击下钻)';
   }} else if (level === 1) {{
     // L2: subcategories of parent
     var info = CAT_HIERARCHY[parentCat];
@@ -1919,9 +1942,9 @@ function renderPieLevel(divId, level, parentCat) {{
     subs.sort(function(a,b) {{ return b.value - a.value; }});
     labels = subs.map(function(s) {{ return s.label; }});
     values = subs.map(function(s) {{ return s.value; }});
-    title = parentCat + ' (点击返回 | 点击子类下钻)';
+    title = parentCat + ' (点击下钻)';
   }} else {{
-    // L3: 汽车/交通 subcategories
+    // L3: subcategories of L2
     var info3 = null;
     Object.keys(CAT_HIERARCHY).forEach(function(l1) {{
       CAT_HIERARCHY[l1].subs.forEach(function(s) {{
@@ -1936,7 +1959,7 @@ function renderPieLevel(divId, level, parentCat) {{
     }});
     labels = subs3.map(function(s) {{ return s.label; }});
     values = subs3.map(function(s) {{ return s.value; }});
-    title = parentCat + ' 明细 (点击返回)';
+    title = parentCat + ' 明细';
   }}
 
   var total = values.reduce(function(a,b) {{ return a+b; }}, 0);
@@ -1985,6 +2008,11 @@ function renderPieLevel(divId, level, parentCat) {{
           plotDiv._drillLevel = 2;
           plotDiv._drillParent = label;
           renderPieLevel(divId, 2, label);
+        }} else {{
+          // Click leaf: back to L1
+          plotDiv._drillLevel = 0;
+          plotDiv._drillParent = null;
+          renderPieLevel(divId, 0, null);
         }}
       }} else {{
         // L3 → back to L1
