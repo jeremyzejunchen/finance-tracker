@@ -1284,11 +1284,13 @@ function getCellVal(row,col){{
 /* ── Combined filter ── */
 function applyFilters(){{
   var q=searchInput.value.toLowerCase().trim();
+  var account = document.getElementById('report-account').value;
   var visible=0;
   rows.forEach(function(r){{
+    var matchAcct=account==='all'||r.dataset.account===account;
     var matchCat=!activeCat||r.dataset.category===activeCat;
     var matchSearch=!q||r.textContent.toLowerCase().indexOf(q)!==-1;
-    var show=matchCat&&matchSearch;
+    var show=matchAcct&&matchCat&&matchSearch;
     r.classList.toggle('hidden',!show);
     if(show)visible++;
   }});
@@ -1351,7 +1353,11 @@ function updateReport() {{
 }}
 
 // Wire report filters
-document.getElementById('report-account').addEventListener('change', updateReport);
+document.getElementById('report-account').addEventListener('change', function() {{
+  updateReport();
+  updateYearlyStats();
+  applyFilters();
+}});
 document.getElementById('report-year').addEventListener('change', function() {{
   updateReport();
   updateYearlyStats();
@@ -1381,9 +1387,13 @@ updateReport();
 
 /* ── Yearly statistics ── */
 function updateYearlyStats() {{
+  var account = document.getElementById('report-account').value;
   var selectedYear = document.getElementById('report-year').value;
   if (selectedYear === 'all') selectedYear = String(new Date().getFullYear());
-  var yrTxns = transactions.filter(function(t) {{ return t.date.substring(0,4) == selectedYear; }});
+  var yrTxns = transactions.filter(function(t) {{
+    if (account !== 'all' && t.account !== account) return false;
+    return t.date.substring(0,4) == selectedYear;
+  }});
   var yrIn = 0, yrOut = 0;
   var expCat = {{}}, incCat = {{}};
   yrTxns.forEach(function(t) {{
