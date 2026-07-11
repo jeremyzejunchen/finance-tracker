@@ -1016,10 +1016,10 @@ tr.inc .amt{{color:var(--green)}}tr.exp .amt{{color:var(--red)}}
 <div class="kpi-count"><div class="lbl">交易笔数</div><div class="val" id="rpt-count">{len(txns)}</div></div>
 </div>
 
-<!-- 饼图 -->
+<!-- 饼图（JS 动态渲染，跟随筛选联动）-->
 <div class="charts-grid">
-<div class="card"><h2>支出分类占比</h2>{to_html(fig_pie, include_plotlyjs=False, full_html=False)}</div>
-<div class="card"><h2>收入分类占比</h2>{to_html(fig_income_pie, include_plotlyjs=False, full_html=False) if income_cats else '<p style="text-align:center;color:var(--text2);padding:40px">暂无收入数据</p>'}</div>
+<div class="card"><h2>支出分类占比</h2><div id="rpt-expense-pie" style="height:440px"></div></div>
+<div class="card"><h2>收入分类占比</h2><div id="rpt-income-pie" style="height:440px"></div></div>
 </div>
 
 <!-- 分类明细表 -->
@@ -1349,6 +1349,56 @@ function updateReport() {{
       '<td style="text-align:right">' + pct + '%</td>' +
       '<td style="text-align:right">' + (catCounts[cat] || 0) + '</td>';
     tbody.appendChild(tr);
+  }});
+
+  // Dynamic pie charts
+  updatePieChart('rpt-expense-pie', 'expense', extFiltered);
+  updatePieChart('rpt-income-pie', 'income', extFiltered);
+}}
+
+function updatePieChart(divId, type, txns) {{
+  var catData = {{}};
+  txns.filter(function(t) {{ return t.type === type; }}).forEach(function(t) {{
+    catData[t.category] = (catData[t.category] || 0) + t.amount;
+  }});
+  var labels = Object.keys(catData);
+  var values = Object.values(labels.map(function(k) {{ return catData[k]; }}));
+  // Actually get values properly
+  values = labels.map(function(k) {{ return catData[k]; }});
+
+  var colors = type === 'expense'
+    ? ['#ef4444','#f97316','#f59e0b','#eab308','#84cc16','#22c55e','#10b981','#14b8a6','#06b6d4','#3b82f6','#6366f1','#8b5cf6','#a855f7','#d946ef','#ec4899']
+    : ['#10b981','#22c55e','#84cc16','#14b8a6','#06b6d4','#3b82f6','#6366f1','#8b5cf6','#a855f7','#d946ef'];
+
+  var total = values.reduce(function(a,b) {{ return a+b; }}, 0);
+
+  var data = [{{
+    type: 'pie',
+    labels: labels,
+    values: values,
+    hole: 0.45,
+    textinfo: labels.length <= 8 ? 'label+percent' : 'percent',
+    textposition: labels.length <= 8 ? 'auto' : 'outside',
+    textfont: {{size: 11}},
+    marker: {{colors: colors.slice(0, labels.length)}},
+    automargin: true,
+  }}];
+
+  var layout = {{
+    height: 440,
+    margin: {{l: 20, r: 80, t: 10, b: 20}},
+    showlegend: true,
+    legend: {{orientation: 'v', y: 0.5, x: 1.05, xanchor: 'left'}},
+    template: 'plotly_white',
+    paper_bgcolor: 'rgba(0,0,0,0)',
+    plot_bgcolor: 'rgba(0,0,0,0)',
+  }};
+
+  var config = {{displayModeBar: false, responsive: true}};
+
+  Plotly.react(divId, data, layout, config).then(null, function() {{
+    // If react fails (first render), use newPlot
+    Plotly.newPlot(divId, data, layout, config);
   }});
 }}
 
@@ -1760,7 +1810,7 @@ def main():
             print(f"  -> 提取 {len(txns)} 笔交易 (格式: {fmt})")
             # 标记账户来源
             for t in txns:
-                t['account'] = 'DB'
+                t['account'] = 'ME'
                 t['is_internal_transfer'] = False
             all_txns.extend(txns)
 
@@ -1768,11 +1818,11 @@ def main():
         for csv_path in sorted(PDF_DIR.glob("*.csv")):
             print(f"-> 解析 {csv_path.name}...")
             tr_txns = parse_trade_republic_csv(csv_path)
-            # 根据文件名区分账户：含 -cr 的是老婆，其余是自己的 TR
+            # 根据文件名区分账户：含 -cr 的是老婆，其余是自己的
             if '-cr' in csv_path.stem:
                 acct = 'WIFE'
             else:
-                acct = 'TR'
+                acct = 'ME'
             for t in tr_txns:
                 t['account'] = acct
             print(f"  -> 提取 {len(tr_txns)} 笔 CASH 交易 ({acct})")
