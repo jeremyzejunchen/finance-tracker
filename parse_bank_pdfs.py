@@ -37,34 +37,63 @@ OWN_IBANS = {
     "DE08100123456340785111",  # WIFE-TR
 }
 
-# ── 分类规则 (从 记账.html 移植) ─────────────────────────────────────────────
+# ── 分类规则 ─────────────────────────────────────────────────────────────────
+# 两层结构: 第一层(固定支出/活动支出/收入) → 第二层(具体子类)
+# 编辑 categories.md 后告诉 Claude，自动同步到这里
 
-CATEGORY_RULES = [
-    ("购物", ["KAUFLAND", "LIDL", "ALDI", "REWE", "DM-DROGERIE", "GO ASIA",
-              "ALIEXPRESS", "AMAZON", "EBAY", "TEGUT", "EDEKA", "NETTO",
-              "MIX MARKT", "OBI", "PAYBACK PAY", "ROSSMANN", "优衣库", "宜家",
-              "JELLYCAT", "TAOBAO", "S. DIGITS PAYMENT", "SUEDHANNOVER",
-              "IKEA "]),
-    ("交通", ["DEUTSCHE BAHN", "DB VERTRIEB", "PARKSTER", "TANKSTELLE",
-              "TOTAL SERVICE", "CONTRIPARK", "PARKAUTOMATEN", "PARKEN"]),
-    ("餐饮", ["UBER EATS", "LIEFERANDO", "KFC ", "MCDONALD", "BURGER KING",
-              "UMG GASTRONOMIE", "GASTRONOMIE", "UBR. PENDING.UBER",
-              "TANIA MOHAMED AHMED", "CAFE IM NEUEN", "LUTZ MICHAEL",
-              "UBER ", "ROXX GOETTINGEN"]),
-    ("居家", ["HARALD WINDEL", "STADTWERKE", "RUNDFUNK", "E.ON ENERGIE"]),
-    ("汽车", ["VW LEASING", "KFZ", "ARAL", "SHELL", "HUK-COBURG",
-              "VOLKSWAGEN AUTOVERS"]),
-    ("宠物", ["FRESSNAPF", "ZOOPLUS", "TIERARZT", "TIERAERZTLICHES"]),
-    ("通讯", ["VODAFONE", "TELEKOM", "O2 "]),
-    ("服饰", ["LULULEMON", "ZALANDO", "PRIMARK", "UNIQLO"]),
-    ("美容", ["DOUGLAS"]),
-    ("娱乐", ["NETFLIX", "SPOTIFY", "FITNESS FUTURE", "FINION CAPITAL"]),
+EXPENSE_RULES = [
+    # === 固定支出 ===
+    ("房租", ["HARALD WINDEL"]),
+    ("电费", ["E.ON ENERGIE", "STADTWERKE"]),
+    ("广电费", ["RUNDFUNK"]),
+    ("网费", ["TELEKOM DEUTSCHLAND"]),
+    ("健康保险", ["TECHNIKER KRANKENKASSE"]),
+    ("其他保险", ["GOTHAER ALLGEMEINE", "HANSEMERKUR", "SIGNAL IDUNA"]),
+    ("车险", ["VOLKSWAGEN AUTOVERSICHERUNG", "HUK-COBURG", "SPARKASSEN DIREKTVERSICHERUNG"]),
+    ("汽车保养", ["VW LEASING"]),
+    ("健身", ["FINION CAPITAL", "FITNESS FUTURE", "A.I. FITNESS"]),
+    # === 活动支出 ===
+    ("超市日用品", ["KAUFLAND", "LIDL", "ALDI", "REWE", "DM-DROGERIE", "GO ASIA",
+                    "EDEKA", "NETTO", "ROSSMANN", "PENNY", "ACTION", "HANDELSHOF"]),
+    ("线上购物", ["AMAZON", "ALIEXPRESS", "EBAY", "TAOBAO", "ZALANDO", "UNIQLO",
+                  "AMZN MKTP", "SP ORCHIDEEN-KLUSMAN", "SP CHINA MARKT CHEMN",
+                  "NESPRESSO", "PAYPAL *ALIPAY", "DELOOX", "INFIGO", "OCHAMA", "DOCMORRIS"]),
+    ("线下购物", ["OBI", "IKEA", "PRIMARK", "DOUGLAS", "TEGUT", "MIX MARKT"]),
+    ("餐饮外食", ["KFC", "MCDONALD", "BURGER KING", "UBER EATS", "LIEFERANDO",
+                  "TANIA MOHAMED", "UMG GASTRONOMIE", "CAFE", "LUTZ MICHAEL",
+                  "ROXX", "DOOBOO THE GLEN", "CHILICHILLEN HOTPOT", "EISCAFE",
+                  "SPC.MAMAME", "COCO TEA FRESH", "PAMPAS GENT", "THE OLIVE STREETFOOD",
+                  "PAVILLON STADT"]),
+    ("油费", ["ARAL", "SHELL", "TOTAL", "BFT", "PFEFFER", "STAR GOTTINGEN",
+              "OIL 413", "CLASSIC TANKSTELLE", "ESSO", "LEO HERZBERG"]),
+    ("停车费", ["PARKSTER", "PARKDEPOT", "CONTRIPARK", "PARKAUTOMATEN", "PARKEN",
+                "PARKING", "BEZIRKSAMT CHARLOTTENBURG"]),
+    ("汽车税", ["BUNDESKASSE", "KFZ-STEUER"]),
+    ("罚款", ["STADT KASSEL VERKEHRSUEBERW"]),
+    ("公共交通", ["DEUTSCHE BAHN", "DB VERTRIEB", "DE LIJN"]),
+    ("宠物", ["FRESSNAPF", "ZOOPLUS", "TIERARZT", "TIERAERZTLICHES", "DR. MED. VET. WYSTUB"]),
+    ("医疗", ["APOTHEKE", "KRANKENHAUS", "SANITATSHAUS", "DRK", "ARBEITER-SAMARITER"]),
     ("旅行", ["BOOKING", "AIRBNB", "LUFTHANSA", "HOLIDAY INN", "CHECK24",
-              "GOODMORNINGBERLIN", "PREUSS.SCHLOSSER"]),
-    ("保险", ["HANSEMERKUR", "GOTHAER ALLGEMEINE", "SIGNAL IDUNA",
-              "TECHNIKER KRANKENKASSE"]),
-    ("医疗", ["APOTHEKE", "ARBEITER-SAMARITER", "KRANKENHAUS",
-              "SANITATSHAUS", "DRK "]),
+              "GOODMORNINGBERLIN", "PREUSS.SCHLOSSER", "HAMB. ELBPHILHARMONIE"]),
+    ("服饰", ["LULULEMON", "ZALANDO", "PRIMARK", "UNIQLO"]),
+    ("娱乐", ["NETFLIX", "SPOTIFY"]),
+    ("学费", ["GEORG-AUGUST-UNIVERSITAT", "UMG", "GOTTINGEN STIFTUNG"]),
+    ("市政缴费", ["STADT GOETTINGEN", "BUERGERBUERO", "GENERALKON. DER VR CHINA"]),
+    ("网上充值", ["GOOGLE CLOUD", "APPLE.COM/BILL"]),
+    ("邮寄", ["DEUTSCHE POST"]),
+    ("家人转账", ["RUI CHENG"]),
+    ("朋友转账", ["ABDUL RAHMAN DJALAL", "YANG SUN", "PAYPAL *CATHERINE2013"]),
+    ("投资", ["SPACEX"]),
+    ("押金退回", ["CATELLA REAL ESTATE"]),
+]
+
+INCOME_RULES = [
+    ("工资", ["DRES. DEKOWSKI, RENNER"]),
+    ("大学薪资", ["GEORG-AUGUST-UNIVERSITAT", "UMG", "GOTTINGEN STIFTUNG"]),
+    ("奖学金/津贴", ["CATELLA REAL ESTATE", "SPARKASSEN DIREKTVERSICHERUNG"]),
+    ("二手收入", ["MANGOPAY", "DIANA BUCK", "KARIN MOLLBERG"]),
+    ("投资收入", ["TESLA", "CORE S&P 500", "NETFLIX", "SAVEBACK", "STOCKPERK"]),
+    ("利息收入", ["INTEREST PAYMENT", "CREDIT INTEREST", "LEIPZIG ACCOUNT"]),
 ]
 
 # ── PDF 格式检测 ────────────────────────────────────────────────────────────
@@ -467,18 +496,25 @@ def parse_amount_f2(s: str) -> float:
 def categorize(merchant: str, amount: float, details: str = "") -> str:
     upper = merchant.upper()
     if amount > 0:
-        return "收入"
-    for cat, keywords in CATEGORY_RULES:
+        # 收入：匹配 INCOME_RULES
+        for cat, keywords in INCOME_RULES:
+            for kw in keywords:
+                if kw in upper or kw in details.upper():
+                    return cat
+        return "其他收入"
+    # 支出：匹配 EXPENSE_RULES
+    for cat, keywords in EXPENSE_RULES:
         for kw in keywords:
             if kw in upper:
                 return cat
-    # PayPal: 从详情中推断真实商户
+    # PayPal 未识别 → 尝试从详情推断
     if 'PAYPAL' in upper:
         du = details.upper()
-        if 'ALIEXPRESS' in du or 'AMAZON' in du or 'EBAY' in du or 'EINKAUF BEI' in du:
-            return "购物"
-        if 'UBER' in du:
-            return "餐饮"
+        for cat, keywords in EXPENSE_RULES:
+            for kw in keywords:
+                if kw in du:
+                    return cat
+        return "PayPal通用"
     return "其他"
 
 
