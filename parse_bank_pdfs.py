@@ -642,6 +642,7 @@ def build_report(transactions: list[dict]) -> str:
             xaxis_title="月份", yaxis_title="EUR",
             template='plotly_white', height=400, margin=dict(l=40, r=20, t=50, b=40),
             hovermode='x unified',
+            yaxis_tickprefix='€', yaxis_tickformat=',.0f',
         )
         yearly_charts[yr] = fig
 
