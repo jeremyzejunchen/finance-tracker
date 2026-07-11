@@ -1738,6 +1738,17 @@ def post_process(transactions: list[dict]) -> list[dict]:
         merchant = t.get('merchant', '')
         details = t.get('details', '')
 
+        # 换汇交易: PAYM.ORDER 开头 → 标记为不计入收支
+        if merchant.startswith('PAYM.ORDER'):
+            t['is_internal_transfer'] = True
+            # 从描述中提取真实汇款人
+            if 'CHEN ZEJUN' in merchant.upper():
+                t['merchant'] = '换汇 (Zejun Chen)'
+            elif 'CHENG RUI' in merchant.upper():
+                t['merchant'] = '换汇 (Cheng Rui)'
+            else:
+                t['merchant'] = '换汇'
+
         # 格式一 Debit Card Payment: merchant 行就是 "Debit Card Payment"
         if merchant == 'Debit Card Payment':
             m = CARD_STORE_F1_RE.search(details)
