@@ -534,8 +534,8 @@ def build_report(transactions: list[dict]) -> str:
     all_cats = set()
 
     for t in txns:
-        if t.get('is_internal_transfer'):
-            continue  # 内部转账和换汇不参与图表统计
+        if t.get('is_internal_transfer') or t.get('is_failed_transaction'):
+            continue  # 内部转账、换汇、失败交易不参与图表统计
         mk = t['booking_date'][:7]
         cat = t.get('category', '其他')
         if t['amount'] > 0:
@@ -656,7 +656,7 @@ def build_report(transactions: list[dict]) -> str:
     txns_json = _json.dumps(txns, ensure_ascii=False, default=str)
 
     # ── 统计卡片（排除内部转账）──
-    ext_txns = [t for t in txns if not t.get('is_internal_transfer')]
+    ext_txns = [t for t in txns if not t.get('is_internal_transfer') and not t.get('is_failed_transaction')]
     total_in = sum(t['amount'] for t in ext_txns if t['amount'] > 0)
     total_out = abs(sum(t['amount'] for t in ext_txns if t['amount'] < 0))
     net = total_in - total_out
@@ -668,13 +668,15 @@ def build_report(transactions: list[dict]) -> str:
     table_rows = []
     accounts = sorted(set(t.get('account', 'DB') for t in txns))
     for t in reversed(txns):
+        if t.get('is_failed_transaction'):
+            continue  # 失败交易不出现在交易明细中
         css = 'inc' if t['amount'] > 0 else 'exp'
         if t.get('is_internal_transfer'):
             css += ' internal'
         cat = t.get('category', '其他')
         acct = t.get('account', 'DB')
         table_rows.append(
-            f'<tr class="{css}" data-category="{cat}" data-account="{acct}" data-internal="{1 if t.get("is_internal_transfer") else 0}" data-date="{t["booking_date"]}">'
+            f'<tr class="{css}" data-category="{cat}" data-account="{acct}" data-internal="{1 if t.get("is_internal_transfer") else 0}" data-failed="{1 if t.get("is_failed_transaction") else 0}" data-date="{t["booking_date"]}">'
             f'<td>{t["booking_date"]}</td>'
             f'<td>{t.get("merchant","")[:55]}</td>'
             f'<td><span class="tag">{cat}</span></td>'
@@ -913,6 +915,7 @@ thead th.sorted .sort-arrow{{opacity:1}}
 tbody td{{padding:8px 12px;border-bottom:1px solid var(--border)}}
 tr.hidden{{display:none}}
 tr.internal td{{color:var(--text2);font-style:italic}}
+tr.failed td{{color:#ef4444;text-decoration:line-through}}
 tr:hover td{{background:#f8fafc}}
 .amt{{text-align:right;font-weight:600;font-variant-numeric:tabular-nums}}
 tr.inc .amt{{color:var(--green)}}tr.exp .amt{{color:var(--red)}}
@@ -1207,6 +1210,7 @@ var transactions = RAW_TRANSACTIONS.map(function(t) {{
     description: t.merchant || '',
     account: t.account || 'DB',
     isInternal: t.is_internal_transfer || false,
+    isFailed: t.is_failed_transaction || false,
   }};
 }});
 
@@ -1340,7 +1344,7 @@ function updateReport() {{
   }});
 
   // 排除内部转账
-  var extFiltered = filtered.filter(function(t) {{ return !t.isInternal; }});
+  var extFiltered = filtered.filter(function(t) {{ return !t.isInternal && !t.isFailed; }});
   var totalIn = 0, totalOut = 0;
   var catTotals = {{}};
   var catCounts = {{}};
@@ -1501,7 +1505,7 @@ function updateYearlyStats() {{
   var selectedYear = document.getElementById('report-year').value;
   if (selectedYear === 'all') selectedYear = String(new Date().getFullYear());
   var yrTxns = transactions.filter(function(t) {{
-    if (t.isInternal) return false;
+    if (t.isInternal || t.isFailed) return false;
     if (account !== 'all' && t.account !== account) return false;
     return t.date.substring(0,4) == selectedYear;
   }});
@@ -1836,6 +1840,38 @@ def post_process(transactions: list[dict]) -> list[dict]:
         if key not in seen:
             seen[key] = t
             deduped.append(t)
+
+    # 检测失败/冲正交易: ±3 天内同一金额同一人一进一出
+    from collections import defaultdict as _dd
+    from datetime import timedelta as _td
+    by_amt_merchant = _dd(list)
+    for t in deduped:
+        if t.get('is_internal_transfer') or t.get('is_failed_transaction'):
+            continue
+        key = (round(abs(t['amount']), 2), t['merchant'][:20])
+        by_amt_merchant[key].append(t)
+
+    for key, group in by_amt_merchant.items():
+        if len(group) < 2:
+            continue
+        # 排序后检查 ±3 天内是否有反向交易
+        group.sort(key=lambda x: x['booking_date'])
+        for i in range(len(group)):
+            for j in range(i + 1, len(group)):
+                a, b = group[i], group[j]
+                # 必须方向相反
+                if (a['amount'] > 0) == (b['amount'] > 0):
+                    continue
+                # ±3 天内
+                try:
+                    da = datetime.strptime(a['booking_date'], '%Y-%m-%d')
+                    db = datetime.strptime(b['booking_date'], '%Y-%m-%d')
+                except ValueError:
+                    continue
+                if abs((db - da).days) <= 3:
+                    a['is_failed_transaction'] = True
+                    b['is_failed_transaction'] = True
+
     return deduped
 
 
@@ -1922,6 +1958,23 @@ def main():
             print(f"[错误] {args.month} 没有交易数据")
             sys.exit(1)
         print(f"-> 筛选 {args.month}: {len(all_txns)} 笔")
+
+    # 生成失败交易审计文件
+    failed = [t for t in all_txns if t.get('is_failed_transaction')]
+    if failed:
+        audit_path = SCRIPT_DIR / "failed_transactions_audit.txt"
+        lines = ["失败/冲正交易审计报告", "=" * 60,
+                 f"共 {len(failed)} 笔（已从统计中排除）", ""]
+        for t in sorted(failed, key=lambda x: x['booking_date']):
+            lines.append(f"{t['booking_date']} | {t['amount']:>10.2f} | {t.get('merchant','')}")
+            lines.append(f"  账户: {t.get('account','?')} | 类型: {t.get('type','?')}")
+            if t.get('details'):
+                lines.append(f"  详情: {t['details'][:100]}")
+            lines.append("")
+        lines.append("=" * 60)
+        lines.append(f"生成时间: {datetime.now().strftime('%Y-%m-%d %H:%M')}")
+        audit_path.write_text('\n'.join(lines), encoding='utf-8')
+        print(f"\n[审计] 失败交易报告: {audit_path} ({len(failed)} 笔)")
 
     # 生成报告
     output = Path(args.output) if args.output else OUTPUT_FILE
