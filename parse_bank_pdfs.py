@@ -1501,6 +1501,7 @@ function updateYearlyStats() {{
   var selectedYear = document.getElementById('report-year').value;
   if (selectedYear === 'all') selectedYear = String(new Date().getFullYear());
   var yrTxns = transactions.filter(function(t) {{
+    if (t.isInternal) return false;
     if (account !== 'all' && t.account !== account) return false;
     return t.date.substring(0,4) == selectedYear;
   }});
