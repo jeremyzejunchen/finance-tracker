@@ -98,12 +98,6 @@ PDF 文本提取（PyMuPDF）
 
 只上传代码，不提交数据文件（PDF 银行流水、CSV 导出、缓存、生成的 HTML）。
 
-## 其他 HTML 文件
-
-- `记账.html` — 基于 Tailwind 的手动记账 SPA。三页签，Chart.js 饼图，localStorage 持久化。不从 PDF 读取数据。
-- `记账固定支出.html` — 同上 + 固定支出规则和趋势分析。
-- 这两个文件独立于 PDF 流水线，是手动记账系统。`bank_summary_2025.html` 的功能已完全覆盖这两个文件，数据来源为银行 PDF。
-
 ## 工作约定
 
 - `bank_summary_2025.html` 由 `parse_bank_pdfs.py` 生成。快速调试可以直接改 HTML，最终改动回归 Python 脚本。

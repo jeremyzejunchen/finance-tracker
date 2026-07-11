@@ -617,7 +617,7 @@ def build_report(transactions: list[dict]) -> str:
     plotly_js = max(scripts, key=len)  # 库脚本总是最大的
 
     return f"""<!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-theme="dark">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -848,21 +848,37 @@ tr.inc .amt{{color:var(--green)}}tr.exp .amt{{color:var(--red)}}
 /* ═══════════════════════════════════════════════════════════════════════════
    Dark Mode
    ═══════════════════════════════════════════════════════════════════════════ */
-@media (prefers-color-scheme:dark){{
-:root{{
+[data-theme="dark"] {{
   --bg:#0b0f19;--surface:#111827;--text:#e2e8f0;--text2:#94a3b8;
   --border:#1e293b;--accent:#818cf8;--accent2:#6366f1;
 }}
-tr:hover td{{background:#1a2332}}
-.tag{{background:#1e293b;color:var(--text2)}}
-thead th{{background:#1a2232}}
-.top-cats button{{background:var(--surface);border-color:#374151}}
-.top-cats button:hover{{background:#1e1b4b;border-color:var(--accent)}}
-.search-box input{{background:#1a2232}}
+[data-theme="dark"] tr:hover td{{background:#1a2332}}
+[data-theme="dark"] .tag{{background:#1e293b;color:var(--text2)}}
+[data-theme="dark"] thead th{{background:#1a2232}}
+[data-theme="dark"] .top-cats button{{background:var(--surface);border-color:#374151}}
+[data-theme="dark"] .top-cats button:hover{{background:#1e1b4b;border-color:var(--accent)}}
+[data-theme="dark"] .search-box input{{background:#1a2232}}
+[data-theme="dark"] .cat-item{{background:#1a2232}}
+[data-theme="dark"] .tag-chip{{background:#1a2232}}
+[data-theme="dark"] .detail-table th{{background:#1a2232}}
+[data-theme="dark"] .detail-table tbody tr:hover td{{background:#1a2332}}
+[data-theme="dark"] .filter-item select,[data-theme="dark"] .filter-item input{{background:#1a2232;border-color:#374151}}
+[data-theme="dark"] .dialog-box{{background:#1e293b;border:1px solid #374151}}
+[data-theme="dark"] .dialog-box .btn-cancel{{background:#0b0f19;color:#e2e8f0}}
+
+/* ── Theme Toggle ── */
+.theme-toggle{{
+  position:fixed;top:16px;right:16px;z-index:100;
+  width:40px;height:40px;border-radius:50%;border:1px solid var(--border);
+  background:var(--surface);color:var(--text);cursor:pointer;
+  font-size:1.1rem;display:flex;align-items:center;justify-content:center;
+  box-shadow:var(--kpi-shadow);transition:transform .15s;
 }}
+.theme-toggle:hover{{transform:scale(1.1)}}
 </style>
 </head>
 <body>
+<button class="theme-toggle" id="themeToggle" title="切换明暗模式">&#9789;</button>
 <main>
 
 <div class="header">
@@ -1101,6 +1117,22 @@ var transactions = RAW_TRANSACTIONS.map(function(t) {{
     description: t.merchant || '',
   }};
 }});
+
+/* ── Theme toggle ── */
+(function(){{
+  var html=document.documentElement, btn=document.getElementById('themeToggle');
+  var saved=localStorage.getItem('bankTheme');
+  if (!saved) saved='dark';
+  html.setAttribute('data-theme', saved);
+  btn.innerHTML = saved==='dark' ? '&#9789;' : '&#9728;';
+  btn.addEventListener('click',function(){{
+    var cur=html.getAttribute('data-theme');
+    var next = cur==='dark' ? 'light' : 'dark';
+    html.setAttribute('data-theme', next);
+    btn.innerHTML = next==='dark' ? '&#9789;' : '&#9728;';
+    localStorage.setItem('bankTheme', next);
+  }});
+}})();
 
 /* ── Tab switching ── */
 document.querySelector('.tabs').addEventListener('click',function(e){{
