@@ -36,21 +36,21 @@
 | 子类 | 关键字/商户 | 说明 |
 |------|-----------|------|
 | 超市日用品 | KAUFLAND, LIDL, ALDI, REWE, DM-DROGERIE, GO ASIA, EDEKA, NETTO, ROSSMANN, Penny, Action, Handelshof | 日常食物和日用品 |
-| 线上购物 | AMAZON, ALIEXPRESS, EBAY, TAOBAO, ZALANDO, UNIQLO, AMZN Mktp, SP ORCHIDEEN-KLUSMAN, SP CHINA MARKT CHEMN, Nespresso, PAYPAL *ALIPAY, Deloox, infigo, OCHAMA, DocMorris, Joybuy | 网购各类商品 |
+| 线上购物 | AMAZON, ALIEXPRESS, EBAY, TAOBAO, ZALANDO, UNIQLO, AMZN Mktp, SP ORCHIDEEN-KLUSMAN, SP CHINA MARKT CHEMN, Nespresso, PAYPAL *ALIPAY, Deloox, infigo, OCHAMA, DocMorris, Joybuy, FERA, Jellycat, Smyths, THG Beauty, lookfantastic, Vinted, Kleiderkreisel, HERMANN Commerce | 网购各类商品 |
 | 线下购物 | OBI, IKEA, PRIMARK, DOUGLAS, TEGUT, MIX MARKT | 实体店消费 |
-| 餐饮外食 | KFC, MCDONALD, BURGER KING, UBER EATS, LIEFERANDO, TANIA MOHAMED, UMG GASTRONOMIE, CAFE, LUTZ MICHAEL, ROXX, DOOBOO THE GLEN, ChiliChillen Hotpot, Eiscafe, SPC.Mamame, COCO TEA FRESH, PAMPAS GENT, THE OLIVE STREETFOOD, PAVILLON STADT | 外食和外卖 |
+| 餐饮外食 | KFC, MCDONALD, BURGER KING, UBER, LIEFERANDO, TANIA MOHAMED, UMG GASTRONOMIE, CAFE, LUTZ MICHAEL, ROXX, DOOBOO THE GLEN, ChiliChillen Hotpot, Eiscafe, SPC.Mamame, COCO TEA FRESH, PAMPAS GENT, THE OLIVE STREETFOOD, PAVILLON STADT | 外食和外卖 |
 | 汽车/交通 | 见下方三级分类 | 所有交通相关支出 |
-| 宠物 | FRESSNAPF, ZOOPLUS, ZOOROYAL, TIERARZT, TIERAERZTLICHES, DR. MED. VET. WYSTUB | 兽医和粮食 |
-| 医疗 | APOTHEKE, KRANKENHAUS, SANITATSHAUS, DRK, ARBEITER-SAMARITER, Shop Apotheke | 药房和医疗自费 |
-| 旅行 | BOOKING, AIRBNB, LUFTHANSA, HOLIDAY INN, CHECK24, GOODMORNINGBERLIN, PREUSS.SCHLOSSER, Hamb. Elbphilharmonie | 酒店和出行 |
-| 服饰 | LULULEMON, ZALANDO, PRIMARK, UNIQLO, 优衣库, 宜家 | 衣物 |
-| 娱乐 | NETFLIX, SPOTIFY, CINEMAXX | 流媒体和影院 |
+| 宠物 | FRESSNAPF, ZOOPLUS, ZOOROYAL, TIERARZT, TIERAERZTLICHES, DR. MED. VET. WYSTUB, CatAmore, Fox4Pets, Granatapet, Zooland | 兽医和粮食 |
+| 医疗 | APOTHEKE, KRANKENHAUS, SANITATSHAUS, DRK, ARBEITER-SAMARITER, Shop Apotheke, APO Pharmacy | 药房和医疗自费 |
+| 旅行 | BOOKING, AIRBNB, LUFTHANSA, HOLIDAY INN, CHECK24, GOODMORNINGBERLIN, PREUSS.SCHLOSSER, Hamb. Elbphilharmonie, Headout | 酒店和出行 |
+| 服饰 | LULULEMON, ZALANDO, PRIMARK, UNIQLO, 优衣库, 宜家, ARCTERYX, Ralph Lauren, RL Finance | 衣物 |
+| 娱乐 | NETFLIX, SPOTIFY, CINEMAXX, Nexon | 流媒体和影院 |
 | 学费 | Georg-August-Universitat, UMG, Gottingen Stiftung, Heenemann | 大学相关扣款 + 医学教材 |
 | 市政缴费 | Stadt Goettingen, STADT GOETTINGEN, Buergerbuero, Generalkon. der VR China | 市政和官方缴费 |
-| 网上充值 | Google CLOUD, APPLE.COM/BILL, OpenAI | 云服务和订阅（含 ChatGPT） |
-| 邮寄 | Deutsche Post | 邮局 |
-| 家人转账 | Rui Cheng | 给家人的汇款 |
-| 朋友转账 | Abdul Rahman Djalal, YANG SUN, PAYPAL *catherine2013, Yuxiao Luo, Siwen Yuan | 给朋友的汇款 |
+| 网上充值 | Google CLOUD, APPLE, OpenAI | 云服务和订阅（含 ChatGPT） |
+| 邮寄 | Deutsche Post, DPD, Hermes | 邮局 |
+| 家人转账 | Rui Cheng, Zejun Chen | 给家人的汇款 |
+| 朋友转账 | Abdul, YANG SUN, PAYPAL *catherine2013, Yuxiao Luo, Siwen Yuan, Yi He, Rui Guo, Birong Xu, dennis schwarze, Juliette Owczarek, Tzu-Yueh Chen | 给朋友的汇款 |
 | 投资 | SpaceX | IPO/投资相关 |
 | 押金退回 | Catella Real Estate AG | 押金类 |
 | PayPal通用 | PAYPAL | PayPal 未识别具体商户时 |

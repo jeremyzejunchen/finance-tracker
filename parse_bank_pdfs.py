@@ -30,22 +30,36 @@ PDF_DIR = SCRIPT_DIR / "银行流水"
 CACHE_FILE = SCRIPT_DIR / "bank_transactions.json"
 OUTPUT_FILE = SCRIPT_DIR / "bank_summary_2025.html"
 
-# PayPal CSV 内部交易类型（不计入收支）
+# PayPal CSV 内部交易类型（不计入收支，新 CSV 格式 2026-07）
+# 新 CSV 无 Status/Balance Impact 列，类型在 Description (EN) / Beschreibung (DE) 中
 PAYPAL_INTERNAL_TYPES = {
-    # 英文
-    'Bank Deposit to PP Account ',
-    'User Initiated Withdrawal',
-    'General Authorization',
+    # 英文 (ME 账户)
+    'Bank Deposit to PP Account',
     'General Card Deposit',
     'General Card Withdrawal',
+    'User Initiated Withdrawal',
     'Reversal of ACH Deposit',
     'Reversal of ACH Withdrawal Transaction',
-    # 德文
-    'Bankgutschrift auf PayPal-Konto ',
-    'Von Nutzer eingeleitete Abbuchung',
-    'Allgemeine Autorisierung',
+    'Account Hold for Open Authorization',
+    'Reversal of General Account Hold',
+    'General Authorization',
+    # 德文 (WIFE 账户)
+    'Bankgutschrift auf PayPal-Konto',
     'Allgemeine Gutschrift auf Kreditkarte',
+    'Von Nutzer eingeleitete Abbuchung',
     'Rückbuchung von ACH-Gutschrift',
+    'Einbehaltung für offene Autorisierung',
+    'Rückbuchung allgemeiner Einbehaltung',
+    'ACH-Überweisung als Zahlungsquelle für Ausgleich von Kontoguthaben',
+    'Allgemeine Autorisierung',
+}
+
+# 德文 Beschreibung → 英文标准名映射（WIFE 账户 CSV 类型名统一化）
+PP_TYPE_DE_TO_EN = {
+    'PayPal Express-Zahlung': 'Express Checkout Payment',
+    'Handyzahlung': 'Mobile Payment',
+    'Allgemeine Zahlung': 'General Payment',
+    'Zahlung im Einzugsverfahren mit Zahlungsrechnung': 'PreApproved Payment Bill User Payment',
 }
 
 # ── 自有 IBAN（用于识别账户间内部转账）──────────────────────────────────────
@@ -68,7 +82,8 @@ EXPENSE_RULES = [
     ("话费", ["VODAFONE"]),
     ("健康保险", ["TECHNIKER KRANKENKASSE"]),
     ("其他保险", ["GOTHAER ALLGEMEINE", "HANSEMERKUR", "SIGNAL IDUNA"]),
-    ("车险", ["VOLKSWAGEN AUTOVERSICHERUNG", "HUK-COBURG", "SPARKASSEN DIREKTVERSICHERUNG"]),
+    ("车险", ["VOLKSWAGEN AUTOVERSICHERUNG", "HUK-COBURG", "SPARKASSEN DIREKTVERSICHERUNG",
+              "CONTINENTALE"]),
     ("汽车保养", ["VW LEASING"]),
     ("健身", ["FINION CAPITAL", "FITNESS FUTURE", "A.I. FITNESS"]),
     # === 活动支出 ===
@@ -77,9 +92,10 @@ EXPENSE_RULES = [
     ("线上购物", ["AMAZON", "ALIEXPRESS", "EBAY", "TAOBAO", "ZALANDO", "UNIQLO",
                   "AMZN MKTP", "SP ORCHIDEEN-KLUSMAN", "SP CHINA MARKT CHEMN",
                   "NESPRESSO", "PAYPAL *ALIPAY", "DELOOX", "INFIGO", "OCHAMA", "DOCMORRIS",
-                  "JOYBUY"]),
+                  "JOYBUY", "FERA", "JELLYCAT", "SMYTHS", "THG BEAUTY", "LOOKFANTASTIC",
+                  "VINTED", "KLEIDERKREISEL", "HERMANN COMMERCE"]),
     ("线下购物", ["OBI", "IKEA", "PRIMARK", "DOUGLAS", "TEGUT", "MIX MARKT"]),
-    ("餐饮外食", ["KFC", "MCDONALD", "BURGER KING", "UBER EATS", "LIEFERANDO",
+    ("餐饮外食", ["KFC", "MCDONALD", "BURGER KING", "UBER", "LIEFERANDO",
                   "TANIA MOHAMED", "UMG GASTRONOMIE", "CAFE", "LUTZ MICHAEL",
                   "ROXX", "DOOBOO THE GLEN", "CHILICHILLEN HOTPOT", "EISCAFE",
                   "SPC.MAMAME", "COCO TEA FRESH", "PAMPAS GENT", "THE OLIVE STREETFOOD",
@@ -91,20 +107,22 @@ EXPENSE_RULES = [
     ("汽车税", ["BUNDESKASSE", "KFZ-STEUER"]),
     ("罚款", ["STADT KASSEL VERKEHRSUEBERW"]),
     ("公共交通", ["DEUTSCHE BAHN", "DB VERTRIEB", "DE LIJN"]),
-    ("宠物", ["FRESSNAPF", "ZOOPLUS", "TIERARZT", "TIERAERZTLICHES", "DR. MED. VET. WYSTUB"]),
+    ("宠物", ["FRESSNAPF", "ZOOPLUS", "ZOOROYAL", "TIERARZT", "TIERAERZTLICHES",
+              "DR. MED. VET. WYSTUB", "CATAMORE", "FOX4PETS", "GRANATAPET", "ZOOLAND"]),
     ("医疗", ["APOTHEKE", "KRANKENHAUS", "SANITATSHAUS", "DRK", "ARBEITER-SAMARITER",
-              "SHOP APOTHEKE"]),
+              "SHOP APOTHEKE", "APO PHARMACY"]),
     ("旅行", ["BOOKING", "AIRBNB", "LUFTHANSA", "HOLIDAY INN", "CHECK24",
-              "GOODMORNINGBERLIN", "PREUSS.SCHLOSSER", "HAMB. ELBPHILHARMONIE"]),
-    ("服饰", ["LULULEMON", "ZALANDO", "PRIMARK", "UNIQLO"]),
-    ("娱乐", ["NETFLIX", "SPOTIFY"]),
+              "GOODMORNINGBERLIN", "PREUSS.SCHLOSSER", "HAMB. ELBPHILHARMONIE", "HEADOUT"]),
+    ("服饰", ["LULULEMON", "ZALANDO", "PRIMARK", "UNIQLO", "ARCTERYX", "RALPH LAUREN", "RL FINANCE"]),
+    ("娱乐", ["NETFLIX", "SPOTIFY", "CINEMAXX", "NEXON"]),
     ("学费", ["GEORG-AUGUST-UNIVERSITAT", "UMG", "GOTTINGEN STIFTUNG", "HEENEMANN"]),
     ("市政缴费", ["STADT GOETTINGEN", "BUERGERBUERO", "GENERALKON. DER VR CHINA"]),
-    ("网上充值", ["GOOGLE CLOUD", "APPLE.COM/BILL", "OPENAI"]),
-    ("邮寄", ["DEUTSCHE POST"]),
-    ("家人转账", ["RUI CHENG"]),
-    ("朋友转账", ["ABDUL RAHMAN DJALAL", "YANG SUN", "PAYPAL *CATHERINE2013",
-                  "YUXIAO LUO", "SIWEN YUAN"]),
+    ("网上充值", ["GOOGLE CLOUD", "APPLE", "OPENAI"]),
+    ("邮寄", ["DEUTSCHE POST", "DPD", "HERMES"]),
+    ("家人转账", ["RUI CHENG", "ZEJUN CHEN"]),
+    ("朋友转账", ["ABDUL", "YANG SUN", "PAYPAL *CATHERINE2013",
+                  "YUXIAO LUO", "SIWEN YUAN", "YI HE", "RUI GUO", "BIRONG XU",
+                  "DENNIS SCHWARZE", "JULIETTE OWCZAREK", "TZU-YUEH CHEN"]),
     ("投资", ["SPACEX"]),
     ("押金退回", ["CATELLA REAL ESTATE"]),
 ]
@@ -413,9 +431,17 @@ def parse_trade_republic_csv(csv_path: Path) -> list[dict]:
             txn_type = row.get('type', '').strip()
             cparty_iban = row.get('counterparty_iban', '').strip()
 
-            # 检测内部转账
+            # SEPA 扣款 (TRANSFER_DIRECT_DEBIT_INBOUND): CSV name 列是账户持有人，
+            # 真正商户在 description 中 "transfer to <NAME> (IBAN)"，提取后用于分类
+            if txn_type == 'TRANSFER_DIRECT_DEBIT_INBOUND':
+                m = re.search(r'transfer to (.+?) \(', description)
+                if m:
+                    merchant = m.group(1).strip()
+
+            # 检测内部转账（排除 SEPA 扣款，其 counterparty_iban 是自有 IBAN 但交易本身是外部支付）
             is_internal = (
                 'TRANSFER' in txn_type and
+                'DIRECT_DEBIT' not in txn_type and
                 cparty_iban in OWN_IBANS
             )
 
@@ -438,10 +464,17 @@ def parse_trade_republic_csv(csv_path: Path) -> list[dict]:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def parse_paypal_csv(csv_path: Path) -> list[dict]:
-    """解析 PayPal CSV 导出 → 统一交易格式。只提取真实交易，排除内部充值/提现。
-    同时支持英文和德文列名的 CSV。"""
+    """解析 PayPal CSV 导出（新格式 2026-07） → 统一交易格式。
+
+    新 CSV 格式特点：
+    - 列名: Description/Beschreibung (类型), Gross/Brutto (金额), Balance/Guthaben (累计余额)
+    - 无 Status 列（所有行均已完成）
+    - 无 Balance Impact 列（方向由 Gross 符号: 正=收入, 负=支出）
+    - 同时支持英文 (ME) 和德文 (WIFE) 列名
+    """
     import csv as _csv
     txns = []
+
     with open(csv_path, 'r', encoding='utf-8-sig') as f:
         reader = _csv.DictReader(f)
         fieldnames = reader.fieldnames or []
@@ -449,117 +482,101 @@ def parse_paypal_csv(csv_path: Path) -> list[dict]:
         # 检测语言：德文 CSV 用 "Datum" 而非 "Date"
         is_german = any('Datum' in (fn or '') for fn in fieldnames)
 
-        # 列名映射
-        col_type = 'Typ' if is_german else 'Type'
-        col_status = 'Status'
-        col_gross = 'Brutto' if is_german else 'Gross'
-        col_date = 'Datum' if is_german else 'Date'
-        col_name = 'Name'
-        col_item = 'Artikelbezeichnung' if is_german else 'Item Title'
-        col_note = 'Hinweis' if is_german else 'Note'
-        col_txn_id = 'Transaktionscode' if is_german else 'Transaction ID'
-        col_impact = 'Auswirkung auf Guthaben' if is_german else 'Balance Impact'
+        # 新 CSV 列名映射（无 Status / Balance Impact 列）
+        col_desc    = 'Beschreibung' if is_german else 'Description'
+        col_gross   = 'Brutto' if is_german else 'Gross'
+        col_date    = 'Datum' if is_german else 'Date'
+        col_name    = 'Name'  # 两种语言一致
+        col_txn_id  = 'Transaktionscode' if is_german else 'Transaction ID'
+        col_balance = 'Guthaben' if is_german else 'Balance'
+        col_email   = 'Absender E-Mail-Adresse' if is_german else 'From Email Address'
 
-        # 德文状态值
-        completed_statuses = {'Completed', 'Abgeschlossen'}
-        # 德文 Balance Impact
-        debit_impacts = {'Debit', 'Soll'}
-        credit_impacts = {'Credit', 'Haben'}
-
-        # 检测账户：通过发件邮箱判断
+        # 检测账户：通过发件邮箱或文件名判断
         from_email = ''
         for row in reader:
-            from_email = row.get('Absender E-Mail-Adresse' if is_german else 'From Email Address', '').strip()
+            from_email = row.get(col_email, '').strip()
             if from_email:
                 break
-        # 重置读取器
         f.seek(0)
         reader = _csv.DictReader(f)
 
-        # 判断账户归属
-        if 'chengrui' in from_email.lower() or '-cr' in csv_path.stem:
-            account = 'WIFE'
-        else:
-            account = 'ME'
+        account = 'WIFE' if ('chengrui' in from_email.lower() or '-cr' in csv_path.stem) else 'ME'
 
-    # 重新打开读取（因为我们已经消耗了迭代器）
-    with open(csv_path, 'r', encoding='utf-8-sig') as f:
-        reader = _csv.DictReader(f)
         for row in reader:
-            ptype = row.get(col_type, '').strip()
-            status = row.get(col_status, '').strip()
+            desc = row.get(col_desc, '').strip()
 
-            # 跳过内部交易
-            if ptype in PAYPAL_INTERNAL_TYPES:
+            # 跳过内部交易（充值/提现/冻结/逆转等 PayPal 内部操作）
+            if desc in PAYPAL_INTERNAL_TYPES:
                 continue
-            # 跳过非完成状态
-            if status not in completed_statuses:
-                continue
+            # 新 CSV 无 Status 列，不需要状态检查
 
+            # 德文类型名统一映射为英文标准名
+            if is_german and desc in PP_TYPE_DE_TO_EN:
+                desc = PP_TYPE_DE_TO_EN[desc]
+
+            # 解析金额（Gross 符号直接决定方向: 正=收入, 负=支出）
             gross = row.get(col_gross, '0').strip()
             amount = parse_amount_f2(gross)
 
-            # 解析日期
+            # 解析日期（新 CSV 统一 DD.MM.YYYY 格式）
             date_str = row.get(col_date, '').strip()
-            try:
-                booking_date = datetime.strptime(date_str, '%d.%m.%Y').strftime('%Y-%m-%d')
-            except ValueError:
+            booking_date = None
+            for fmt in ('%d.%m.%Y', '%d/%m/%Y'):
                 try:
-                    booking_date = datetime.strptime(date_str, '%d/%m/%Y').strftime('%Y-%m-%d')
+                    booking_date = datetime.strptime(date_str, fmt).strftime('%Y-%m-%d')
+                    break
                 except ValueError:
                     continue
+            if not booking_date:
+                continue
 
             merchant = row.get(col_name, '').strip()
-            item_title = row.get(col_item, '').strip()
-            note = row.get(col_note, '').strip()
             txn_id = row.get(col_txn_id, '').strip()
-            impact = row.get(col_impact, '').strip()
 
-            # 标准化 Balance Impact
-            if impact in debit_impacts:
-                impact = 'Debit'
-            elif impact in credit_impacts:
-                impact = 'Credit'
-
-            # 解析 Balance 字段（实际银行扣款金额，可能与 Gross 不同）
-            # 当 Balance ≠ Gross 时，差额来自 PayPal 余额支付
-            balance_str = row.get('Balance', '').strip()
-            _pp_balance = None
+            # Balance = 交易后 PayPal 累计余额（仅做参考，不用于匹配）
+            balance_str = row.get(col_balance, '').strip()
+            _pp_balance_after = None
             if balance_str:
-                _pp_balance = parse_amount_f2(balance_str)
+                try:
+                    _pp_balance_after = parse_amount_f2(balance_str)
+                except (ValueError, AttributeError):
+                    pass
 
-            # 构建详情
-            details_parts = []
-            if item_title:
-                details_parts.append(f'Item: {item_title[:200]}')
-            if note:
-                details_parts.append(f'Note: {note[:100]}')
-            details_parts.append(f'PP-TxnID: {txn_id}')
-            details = '\n'.join(details_parts)
+            # 新 CSV 无 Item Title / Note 列，详情仅含交易 ID
+            details = f'PP-TxnID: {txn_id}'
 
             txns.append({
                 'booking_date': booking_date,
                 'value_date': booking_date,
                 'amount': amount,
-                'type': ptype,
+                'type': desc,
                 'merchant': merchant,
                 'details': details,
                 'source_fmt': 'paypal_csv',
                 'account': account,
                 'is_internal_transfer': False,
                 '_pp_txn_id': txn_id,
-                '_pp_impact': impact,
-                '_pp_balance': _pp_balance,
+                '_pp_balance_after': _pp_balance_after,
             })
+
     return txns
+
+
+def _clean_pp_fields(pt: dict) -> dict:
+    """剥离 PayPal 内部字段，返回干净的副本。"""
+    pt_copy = dict(pt)
+    for key in ('_pp_txn_id', '_pp_balance_after'):
+        pt_copy.pop(key, None)
+    return pt_copy
 
 
 def match_paypal_to_bank(pp_txns: list[dict], bank_txns: list[dict]) -> tuple[list[dict], list[dict]]:
     """将 PayPal 交易与银行交易匹配，返回 (new_txns, updated_bank_indices)。
 
-    - 匹配成功的 PayPal 交易 → 用 PayPal 商户名更新银行交易的 merchant，重新分类
-    - 未匹配的 PayPal 交易 → 作为新交易添加到数据中
-    - PayPal 收入匹配到银行 PAYPAL 收入 → 标记银行为内部转账（提现），保留 PayPal 收入
+    - 匹配成功的支出 → 用 PayPal 商户名更新银行交易的 merchant，重新分类
+    - 匹配成功的收入 → 标记银行为内部转账（提现），保留 PayPal 收入
+    - 未匹配的交易 → 作为新交易添加到数据中
+    - 方向由 amount 符号判断: 正=收入, 负=支出（新 CSV 无 Balance Impact 列）
     """
     from datetime import timedelta as _td
 
@@ -567,25 +584,16 @@ def match_paypal_to_bank(pp_txns: list[dict], bank_txns: list[dict]) -> tuple[li
     matched_bank_indices = set()
     pp_credits_matched_to_bank_paypal = set()
 
-    # 为银行交易建立 (amount_abs, date) 索引
-    # 使用 ±5 天窗口
+    # 为银行交易建立 (amount_abs, ...) 索引
     bank_by_abs_amt = {}
     for i, bt in enumerate(bank_txns):
         key = round(abs(bt['amount']), 2)
-        if key not in bank_by_abs_amt:
-            bank_by_abs_amt[key] = []
-        bank_by_abs_amt[key].append(i)
+        bank_by_abs_amt.setdefault(key, []).append(i)
 
-    for pt in pp_txns:
-        pp_amt = pt['amount']
-        pp_date = pt['booking_date']
-        pp_merchant = pt['merchant']
-        pp_impact = pt.get('_pp_impact', '')
-        abs_amt = round(abs(pp_amt), 2)
-
-        # 在 ±5 天内查找金额匹配的银行交易
-        best_match = None
+    # 辅助函数：±5 天窗口内查找最佳匹配
+    def _find_best_match(abs_amt, pp_date):
         candidates = bank_by_abs_amt.get(abs_amt, [])
+        best = None
         for bi in candidates:
             if bi in matched_bank_indices:
                 continue
@@ -596,100 +604,59 @@ def match_paypal_to_bank(pp_txns: list[dict], bank_txns: list[dict]) -> tuple[li
             except ValueError:
                 continue
             if abs((bd - pd).days) <= 5:
-                # 金额匹配 + 日期在窗口内
-                bank_merchant_upper = bt.get('merchant', '').upper()
-                # 优先匹配 PayPal 相关的银行交易
-                if 'PAYPAL' in bank_merchant_upper:
-                    best_match = bi
-                    break  # 精确匹配 PayPal → 立即采用
-                elif best_match is None:
-                    best_match = bi  # 非 PayPal 匹配，先保留
+                bank_m = bt.get('merchant', '').upper()
+                if 'PAYPAL' in bank_m:
+                    return bi  # PayPal 精确匹配 → 立即采用
+                if best is None:
+                    best = bi
+        return best
+
+    for pt in pp_txns:
+        pp_amt = pt['amount']
+        pp_date = pt['booking_date']
+        pp_merchant = pt['merchant']
+        abs_amt = round(abs(pp_amt), 2)
+        is_credit = pp_amt > 0  # amount 符号替代旧 _pp_impact
+
+        best_match = _find_best_match(abs_amt, pp_date)
 
         if best_match is not None:
             bt = bank_txns[best_match]
             matched_bank_indices.add(best_match)
-            bank_merchant_upper = bt.get('merchant', '').upper()
+            bank_m = bt.get('merchant', '').upper()
 
-            if pp_impact == 'Credit' and 'PAYPAL' in bank_merchant_upper:
-                # PayPal 收入 → 银行 PAYPAL 收入（即时转账/提现到银行）
-                # 这是内部转账，标记银行交易为内部转账
-                # 但 PayPal 收入本身是真实收入（如 Rui Cheng 转账），保留
+            if is_credit and 'PAYPAL' in bank_m:
+                # PayPal 收入 → 银行 PAYPAL 收入（提现到银行）
+                # 标记银行为内部转账，保留 PayPal 为真实收入
                 bt['is_internal_transfer'] = True
-                # 将 PayPal 收入作为新交易（如果没有其他匹配）
                 pp_credits_matched_to_bank_paypal.add(pt['_pp_txn_id'])
-                # 把 PayPal 交易加入新交易（作为真实收入来源）
-                pt_copy = dict(pt)
-                del pt_copy['_pp_txn_id']
-                del pt_copy['_pp_impact']
-                if '_pp_balance' in pt_copy:
-                    del pt_copy['_pp_balance']
+                pt_copy = _clean_pp_fields(pt)
                 pt_copy['is_internal_transfer'] = False
                 new_txns.append(pt_copy)
-            elif pp_impact == 'Debit' and 'PAYPAL' in bank_merchant_upper:
-                # PayPal 支出 → 银行 PayPal SEPA 扣款
-                # 用 PayPal 的真实商户名替换银行条目
-                old_merchant = bt['merchant']
+
+            elif not is_credit and 'PAYPAL' in bank_m:
+                # PayPal 支出 → 银行 PAYPAL SEPA 扣款
+                # 用 PayPal 真实商户名覆盖银行条目
                 bt['merchant'] = pp_merchant
-                # 追加 PayPal 详情
                 bt['details'] = bt.get('details', '') + '\n[PayPal] ' + pt.get('details', '')
                 bt['_paypal_enhanced'] = True
-                # 不添加新的 PayPal 条目，银行条目已足够
-            elif pp_impact == 'Debit' and pp_merchant.upper() in bank_merchant_upper:
-                # 同一商户已存在于银行数据中（如 McDonald's 直接在银行扣款）
-                # 不添加重复条目
-                pass
-            elif pp_impact == 'Credit' and pp_merchant.upper() in bank_merchant_upper:
-                # 同一收款人（如 Abdul Djalal 直接打款到银行）
-                pass
-            else:
-                # 匹配到非 PayPal 的银行交易（可能是巧合）
-                # 谨慎起见，添加 PayPal 交易作为新条目
-                pt_copy = dict(pt)
-                del pt_copy['_pp_txn_id']
-                del pt_copy['_pp_impact']
-                if '_pp_balance' in pt_copy:
-                    del pt_copy['_pp_balance']
-                new_txns.append(pt_copy)
-        else:
-            # 未按 Gross 金额匹配 → 尝试 Balance 匹配
-            # 当部分金额来自 PayPal 余额时，银行扣款 (Balance) < 交易总额 (Gross)
-            pp_balance = pt.get('_pp_balance')
-            balance_matched = False
-            if pp_impact == 'Debit' and pp_balance is not None and pp_balance != 0:
-                abs_bal = round(abs(pp_balance), 2)
-                if abs(abs_bal - abs_amt) >= 0.02:  # Balance 与 Gross 不同，才需要二次匹配
-                    bal_candidates = bank_by_abs_amt.get(abs_bal, [])
-                    for bi in bal_candidates:
-                        if bi in matched_bank_indices:
-                            continue
-                        bt = bank_txns[bi]
-                        if 'PAYPAL' not in bt.get('merchant', '').upper():
-                            continue
-                        try:
-                            bd = datetime.strptime(bt['booking_date'], '%Y-%m-%d')
-                            pd = datetime.strptime(pp_date, '%Y-%m-%d')
-                        except ValueError:
-                            continue
-                        if abs((bd - pd).days) <= 5:
-                            # Balance 匹配成功！
-                            # 银行扣款是 PayPal 交易的资金来源之一（其余来自余额）
-                            matched_bank_indices.add(bi)
-                            bt['merchant'] = pp_merchant
-                            bt['amount'] = pp_amt  # 使用 PayPal 完整交易金额
-                            bt['details'] = bt.get('details', '') + '\n[PayPal] ' + pt.get('details', '')
-                            bt['details'] += f'\n[PayPal] Bankeinzug {abs_bal:.2f} EUR (Gesamt {abs_amt:.2f} EUR, {abs_amt - abs_bal:.2f} EUR per Guthaben)'
-                            bt['_paypal_enhanced'] = True
-                            balance_matched = True
-                            break
 
-            if not balance_matched:
-                # 仍未匹配 → 作为新交易添加
-                pt_copy = dict(pt)
-                del pt_copy['_pp_txn_id']
-                del pt_copy['_pp_impact']
-                if '_pp_balance' in pt_copy:
-                    del pt_copy['_pp_balance']
-                new_txns.append(pt_copy)
+            elif not is_credit and pp_merchant.upper() in bank_m:
+                # 同一商户已在银行数据中（如 McDonald's 直接从银行扣款）
+                pass
+
+            elif is_credit and pp_merchant.upper() in bank_m:
+                # 同一收款人直接向银行打款
+                pass
+
+            else:
+                # 匹配到非 PayPal 银行交易 → 作为新交易加入
+                new_txns.append(_clean_pp_fields(pt))
+        else:
+            # 未匹配 → 作为新交易加入
+            # ponytail: 不再做 Balance 二次匹配。新 CSV 的 Balance 是累计余额，
+            # 不是银行扣款金额，无法用于匹配银行 PAYPAL 条目。
+            new_txns.append(_clean_pp_fields(pt))
 
     return new_txns, matched_bank_indices
 
@@ -790,17 +757,9 @@ def categorize(merchant: str, amount: float, details: str = "") -> str:
         for kw in keywords:
             if kw in upper:
                 return cat
-    # PayPal 未识别 → 从详情提取真实商户名再匹配
+    # PayPal 未识别 → 尝试从详情匹配关键词，仍不匹配则归 PayPal通用
     if 'PAYPAL' in upper:
         du = details.upper()
-        # 提取 "Ihr Einkauf bei XXX" 中的商户名
-        m = re.search(r'(?:IHR EINKAUF BEI|PAYPAL-ZAHLUNG UBER)\s+(.+?)(?:,|$)', du)
-        if m:
-            extracted = m.group(1).strip()
-            for cat, keywords in EXPENSE_RULES:
-                for kw in keywords:
-                    if kw in extracted:
-                        return cat
         for cat, keywords in EXPENSE_RULES:
             for kw in keywords:
                 if kw in du:
@@ -821,12 +780,16 @@ def load_cache(force: bool = False) -> dict:
         cache = raw.get("transactions", raw)  # 兼容新旧格式
         cache_mtime = CACHE_FILE.stat().st_mtime
         pdf_files = list(PDF_DIR.glob("*.pdf"))
+        csv_files = list(PDF_DIR.glob("*.csv"))
         cache_count = raw.get("_count", 0)
         if len(pdf_files) != cache_count:
             return []
         for pdf in pdf_files:
             if pdf.stat().st_mtime > cache_mtime:
                 return []  # 有新 PDF 或被修改，缓存失效
+        for csv_f in csv_files:
+            if csv_f.stat().st_mtime > cache_mtime:
+                return []  # CSV (PayPal/TR) 更新 → 缓存失效
         return cache
     except (json.JSONDecodeError, KeyError):
         return []

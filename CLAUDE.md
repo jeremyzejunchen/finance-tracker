@@ -142,19 +142,38 @@ PayPal CSV 匹配逻辑：
 - NAS 路径（`\\fritz.box\FRITZ.NAS\Jeremy_4T\记账`）是标准位置。
 - `记账导出数据/` 中的 CSV 是 UTF-16LE 编码的鲨鱼记账 App 导出文件，不在当前流水线中使用。
 
-## 当前状态（2026-07-11）
+## 当前状态（2026-07-12）
 
-- **交易总数**：932 笔（含 48 笔内部转账，实际 884 笔有效交易）
-- **总收入**：EUR 209,789.36 | **总支出**：EUR 161,876.41 | **净额**：EUR +47,912.95
+- **交易总数**：1,011 笔（含 49 笔内部转账，12 笔失败交易，实际 950 笔有效交易）
+- **总收入**：EUR 213,157.48 | **总支出**：EUR 188,125.23 | **净额**：EUR +25,032.25
 - **PDF**：18 个文件（2025-01 ~ 2026-06）
-- **CSV**：Trade Republic ME + WIFE 各一，PayPal ME (英文/有 Balance 字段) + WIFE (德文/无 Balance 字段)
-- **最近改动**：PayPal Balance 匹配（部分余额支付场景），减少 3 笔重复
+- **PayPal CSV**：已更新为新格式导出（2026-07-11）
+- **PDF**：18 个文件（2025-01 ~ 2026-06）
+- **PayPal CSV**：已更新为新格式导出（2026-07-11）
+  - ME (Paypal-*-czj.CSV, 英文) 18 列：Date, Time, Time Zone, Description, Currency, Gross, Fee, Net, Balance, Transaction ID, From Email Address, Name, ...
+  - WIFE (Paypal-*-cr.CSV, 德文) 18 列：Datum, Uhrzeit, Zeitzone, Beschreibung, Währung, Brutto, Entgelt, Netto, Guthaben, Transaktionscode, Absender E-Mail-Adresse, Name, ...
+  - 两个 CSV 同构，**都有 Balance/Guthaben 列**（累计余额，非银行扣款金额）
+  - 无 Status 列，无 Balance Impact 列
+  - 方向由 Gross 符号决定：正=收入，负=支出
+- **Trade Republic CSV**：ME + WIFE 各一
+- **最近改动**：重构 PayPal CSV 解析（新 CSV 格式，移除 Balance 二次匹配）
 
-## PayPal CSV 数据结构
+## PayPal CSV 数据结构（新格式 2026-07）
 
-ME 账户 (Paypal-*-czj.CSV, 英文)：
-- `Gross`：交易总额 | `Balance`：交易后 PayPal 余额
-- 当 `Balance < 0`（借记交易后余额为负）→ 实际银行扣款 = `abs(Balance)`，其余来自 PayPal 余额
-- 当 `Balance ≥ 0` → 全额来自 PayPal 余额，无银行扣款
+通用格式（ME 英文 / WIFE 德文，18 列同构）：
 
-WIFE 账户 (Paypal-*-cr.CSV, 德文)：无 Balance 列。
+| 列 (EN) | 列 (DE) | 含义 |
+|---------|---------|------|
+| Date | Datum | 交易日期 (DD.MM.YYYY) |
+| Description | Beschreibung | 交易类型（见下方分类） |
+| Gross | Brutto | 金额（正=收入，负=支出） |
+| Fee | Entgelt | 手续费（始终为 0） |
+| Net | Netto | 净额（= Gross + Fee） |
+| Balance | Guthaben | **交易后** PayPal 累计余额 |
+| Transaction ID | Transaktionscode | PayPal 交易 ID |
+| Name | Name | 商户名 |
+| Reference Txn ID | Zugehöriger Transaktionscode | 关联交易 ID（Bank Deposit 关联到消费） |
+
+内部类型（需排除）见 `paypal的工作模式.md` 交易类型速查表。
+
+匹配逻辑：`parse_paypal_csv()` 提取真实交易（排除内部类型）→ `match_paypal_to_bank()` 按 Gross 绝对值 ±5 天匹配银行 PAYPAL SEPA 条目。不再使用 Balance 做二次匹配（累计余额无法对应银行扣款金额）。
