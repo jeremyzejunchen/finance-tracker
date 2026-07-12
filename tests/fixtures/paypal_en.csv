@@ -1,0 +1,7 @@
+Date,Description,Currency,Gross,Name,Transaction ID,From Email Address
+01.06.2026,Express Checkout Payment,EUR,-12.50,Example Market,PP-1,me@example.invalid
+02.06.2026,Bank Deposit to PP Account,EUR,20.00,PayPal top up,PP-2,me@example.invalid
+03.06.2026,Payment Refund,EUR,12.50,Example Market,PP-3,me@example.invalid
+04.06.2026,Express Checkout Payment,EUR,-30.00,Split Tender Shop,PP-4,me@example.invalid
+04.06.2026,Express Checkout Payment,EUR,-10.00,Split Tender Shop,PP-5,me@example.invalid
+05.06.2026,Mobile Payment,EUR,50.00,Friend Sender,PP-6,me@example.invalid

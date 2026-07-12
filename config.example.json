@@ -1,0 +1,24 @@
+{
+  "own_accounts": [
+    {
+      "name": "Main Checking",
+      "iban": "DE00123456781234567890"
+    },
+    {
+      "name": "Broker Cash",
+      "iban": "DE00987654329876543210"
+    }
+  ],
+  "paypal_accounts": [
+    {
+      "account": "ME",
+      "sender_emails": ["me@example.invalid"],
+      "filename_contains": ["-me", "-personal"]
+    },
+    {
+      "account": "WIFE",
+      "sender_emails": ["wife@example.invalid"],
+      "filename_contains": ["-wife", "-shared"]
+    }
+  ]
+}

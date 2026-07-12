@@ -1,0 +1,60 @@
+{
+  "db_transactions_layout": [
+    {
+      "booking_date": "2026-06-01",
+      "amount": "-12.50",
+      "merchant": "EXAMPLE MARKET",
+      "account": "Deutsche Bank",
+      "transaction_type": "Debit Card Payment",
+      "is_internal_transfer": false,
+      "excluded_reason": ""
+    },
+    {
+      "booking_date": "2026-06-03",
+      "amount": "-42.10",
+      "merchant": "Utility Provider GmbH",
+      "account": "Deutsche Bank",
+      "transaction_type": "SEPA-Direct Debit",
+      "is_internal_transfer": false,
+      "excluded_reason": ""
+    },
+    {
+      "booking_date": "2026-06-03",
+      "amount": "-12.50",
+      "merchant": "SECOND SHOP",
+      "account": "Deutsche Bank",
+      "transaction_type": "Debit Card Payment",
+      "is_internal_transfer": false,
+      "excluded_reason": ""
+    }
+  ],
+  "db_account_statement_layout": [
+    {
+      "booking_date": "2026-06-06",
+      "amount": "-10.00",
+      "merchant": "COFFEE SHOP BERLIN",
+      "account": "Deutsche Bank",
+      "transaction_type": "Debit Card Payment",
+      "is_internal_transfer": false,
+      "excluded_reason": ""
+    },
+    {
+      "booking_date": "2026-06-07",
+      "amount": "-99.00",
+      "merchant": "PAYM.ORDER JOHN DOE",
+      "account": "Deutsche Bank",
+      "transaction_type": "SEPA Transfer (out)",
+      "is_internal_transfer": true,
+      "excluded_reason": "internal_transfer"
+    },
+    {
+      "booking_date": "2026-06-08",
+      "amount": "-5.00",
+      "merchant": "FAILED MERCHANT",
+      "account": "Deutsche Bank",
+      "transaction_type": "Rückgabe Lastschrift",
+      "is_internal_transfer": false,
+      "excluded_reason": "failed_transaction"
+    }
+  ]
+}
