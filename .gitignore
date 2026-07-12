@@ -3,9 +3,17 @@
 记账导出数据/*.csv
 bank_transactions.json
 bank_summary_2025.html
+财务简表.html
 failed_transactions_audit.txt
 PayPal分析报告.md
 __pycache__/
 *.pyc
 .claude/
 .playwright-mcp/
+
+# Local application data and operator exports
+data/*.db
+data/*.sqlite3
+data/uploads/
+exports/
+.pytest_cache/
