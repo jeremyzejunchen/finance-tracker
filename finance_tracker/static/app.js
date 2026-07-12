@@ -13,6 +13,196 @@ const request = async (url, options = {}) => {
 const table = (headers, rows) =>
   `<div class="table-wrap"><table><thead><tr>${headers.map(h => `<th>${h}</th>`).join("")}</tr></thead><tbody>${rows.join("")}</tbody></table></div>`;
 
+function escapeHtml(value) {
+  return String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
+}
+
+function statusForPreviewRow(row) {
+  if (row.duplicate_source) return "重复来源";
+  if (row.currency.toUpperCase() !== "EUR") return "非 EUR";
+  if (row.is_failed_transaction) return "失败交易";
+  if (row.is_internal_transfer) return "内部转账";
+  if (row.warnings?.length) return "Warning";
+  if (!row.merchant_normalized || row.merchant_normalized.toLowerCase().startsWith("unknown ")) return "未识别商户";
+  return "正常";
+}
+
+function buildPreviewState(data) {
+  return {
+    data,
+    sourceFile: "",
+    account: "",
+    sourceType: "",
+    status: "all",
+    quick: "all",
+    search: "",
+    sortKey: "booking_date",
+    sortDirection: "desc",
+    renderedCount: 0,
+    chunkSize: 120,
+  };
+}
+
+function filterPreviewTransactions(state) {
+  let rows = state.data.transactions.slice();
+  if (state.sourceFile) rows = rows.filter(row => row.filename === state.sourceFile);
+  if (state.account) rows = rows.filter(row => row.account === state.account);
+  if (state.sourceType) rows = rows.filter(row => row.source_type === state.sourceType);
+  if (state.search) {
+    const needle = state.search.toLowerCase();
+    rows = rows.filter(row =>
+      row.merchant_raw.toLowerCase().includes(needle) ||
+      row.merchant_normalized.toLowerCase().includes(needle) ||
+      row.description_raw.toLowerCase().includes(needle),
+    );
+  }
+  if (state.status !== "all") rows = rows.filter(row => statusForPreviewRow(row) === state.status);
+  if (state.quick === "warnings") rows = rows.filter(row => row.warnings?.length);
+  if (state.quick === "internal") rows = rows.filter(row => row.is_internal_transfer);
+  if (state.quick === "failed") rows = rows.filter(row => row.is_failed_transaction);
+  if (state.quick === "non_eur") rows = rows.filter(row => row.currency.toUpperCase() !== "EUR");
+  if (state.quick === "unknown") rows = rows.filter(row => !row.merchant_normalized || row.merchant_normalized.toLowerCase().startsWith("unknown "));
+  rows.sort((left, right) => {
+    const direction = state.sortDirection === "asc" ? 1 : -1;
+    const a = state.sortKey === "amount" ? Number(left.amount) : left[state.sortKey] ?? "";
+    const b = state.sortKey === "amount" ? Number(right.amount) : right[state.sortKey] ?? "";
+    if (a < b) return -1 * direction;
+    if (a > b) return 1 * direction;
+    return 0;
+  });
+  return rows;
+}
+
+function renderPreviewRows(rows, count) {
+  return rows.slice(0, count).map(row => {
+    const description = escapeHtml(row.description_raw);
+    const warningText = row.warnings?.length ? `<div class="label">${row.warnings.map(escapeHtml).join("<br>")}</div>` : "";
+    return `<tr>
+      <td>${escapeHtml(row.filename)}</td>
+      <td>${escapeHtml(row.account)}</td>
+      <td>${row.booking_date}</td>
+      <td>${row.value_date}</td>
+      <td>${escapeHtml(row.merchant_raw)}</td>
+      <td>${escapeHtml(row.merchant_normalized)}</td>
+      <td><details><summary>${escapeHtml((row.description_raw || "").slice(0, 60) || "—")}</summary><div>${description || "—"}${warningText}</div></details></td>
+      <td class="${Number(row.amount) >= 0 ? "amount-positive" : "amount-negative"}">${escapeHtml(row.amount)}</td>
+      <td>${escapeHtml(row.currency)}</td>
+      <td>${escapeHtml(row.transaction_type)}</td>
+      <td>${statusForPreviewRow(row)}</td>
+    </tr>`;
+  }).join("");
+}
+
+function renderImportPreview(target, state) {
+  const rows = filterPreviewTransactions(state);
+  const fileOptions = [...new Set(state.data.transactions.map(item => item.filename))].sort();
+  const accountOptions = [...new Set(state.data.transactions.map(item => item.account))].sort();
+  const sourceOptions = [...new Set(state.data.transactions.map(item => item.source_type))].sort();
+  const stats = state.data.stats;
+  const normalCount = stats.total - stats.warning_count - stats.internal_transfer_count - stats.failed_transaction_count - stats.unsupported_currency_count;
+  state.renderedCount = Math.min(rows.length, state.renderedCount || state.chunkSize);
+  const canShowMore = state.renderedCount < rows.length;
+  const baseline = state.data.baseline?.available
+    ? `<p class="${state.data.baseline.different ? "warning" : "notice"}">基准对比：${state.data.baseline.different ? "存在差异" : "一致"}</p>`
+    : "";
+  target.innerHTML = `<div class="stack">
+    <section class="panel">
+      <div class="grid">
+        <div class="card"><div class="label">总交易数</div><div class="metric">${stats.total}</div></div>
+        <div class="card"><div class="label">正常数量</div><div class="metric">${Math.max(0, normalCount)}</div></div>
+        <div class="card"><div class="label">Warning 数量</div><div class="metric">${stats.warning_count}</div></div>
+        <div class="card"><div class="label">内部转账</div><div class="metric">${stats.internal_transfer_count}</div></div>
+        <div class="card"><div class="label">失败交易</div><div class="metric">${stats.failed_transaction_count}</div></div>
+        <div class="card"><div class="label">非 EUR</div><div class="metric">${stats.unsupported_currency_count}</div></div>
+      </div>
+      ${baseline}
+      ${state.data.blockers.map(item => `<p class="warning">${escapeHtml(item.filename)}：${escapeHtml(item.error)}</p>`).join("")}
+    </section>
+    <section class="panel">
+      <h2>文件汇总</h2>
+      ${table(
+        ["文件名", "来源类型", "识别笔数", "日期范围", "收入", "支出", "Warning", "重复文件"],
+        state.data.previews.map(item => `<tr><td>${escapeHtml(item.filename)}</td><td>${escapeHtml(item.source_type)}</td><td>${item.total}</td><td>${item.date_from || "—"} ~ ${item.date_to || "—"}</td><td>${money(item.income_cents)}</td><td>${money(item.expense_cents)}</td><td>${item.warning_count}</td><td>${item.duplicate_source ? "是" : "否"}</td></tr>`),
+      )}
+    </section>
+    <section class="panel">
+      <h2>全部交易预览</h2>
+      <div class="form-row">
+        <label>搜索<input id="preview-search" value="${escapeHtml(state.search)}" placeholder="搜索商户和说明"></label>
+        <label>来源文件<select id="preview-file"><option value="">全部</option>${fileOptions.map(item => `<option value="${escapeHtml(item)}"${item === state.sourceFile ? " selected" : ""}>${escapeHtml(item)}</option>`).join("")}</select></label>
+        <label>账户<select id="preview-account"><option value="">全部</option>${accountOptions.map(item => `<option value="${escapeHtml(item)}"${item === state.account ? " selected" : ""}>${escapeHtml(item)}</option>`).join("")}</select></label>
+        <label>source_type<select id="preview-source-type"><option value="">全部</option>${sourceOptions.map(item => `<option value="${escapeHtml(item)}"${item === state.sourceType ? " selected" : ""}>${escapeHtml(item)}</option>`).join("")}</select></label>
+        <label>状态<select id="preview-status"><option value="all">全部</option>${["正常", "Warning", "内部转账", "失败交易", "非 EUR", "重复来源", "未识别商户"].map(item => `<option value="${item}"${item === state.status ? " selected" : ""}>${item}</option>`).join("")}</select></label>
+        <label>排序<select id="preview-sort"><option value="booking_date:desc"${state.sortKey === "booking_date" && state.sortDirection === "desc" ? " selected" : ""}>日期 ↓</option><option value="booking_date:asc"${state.sortKey === "booking_date" && state.sortDirection === "asc" ? " selected" : ""}>日期 ↑</option><option value="amount:desc"${state.sortKey === "amount" && state.sortDirection === "desc" ? " selected" : ""}>金额 ↓</option><option value="amount:asc"${state.sortKey === "amount" && state.sortDirection === "asc" ? " selected" : ""}>金额 ↑</option></select></label>
+      </div>
+      <div class="form-row">
+        <button type="button" class="${state.quick === "all" ? "" : "secondary"}" data-quick="all">全部</button>
+        <button type="button" class="${state.quick === "warnings" ? "" : "secondary"}" data-quick="warnings">仅 Warning</button>
+        <button type="button" class="${state.quick === "internal" ? "" : "secondary"}" data-quick="internal">内部转账</button>
+        <button type="button" class="${state.quick === "failed" ? "" : "secondary"}" data-quick="failed">失败交易</button>
+        <button type="button" class="${state.quick === "non_eur" ? "" : "secondary"}" data-quick="non_eur">非 EUR</button>
+        <button type="button" class="${state.quick === "unknown" ? "" : "secondary"}" data-quick="unknown">未识别商户</button>
+      </div>
+      <p class="label">当前显示 ${Math.min(state.renderedCount, rows.length)} / ${rows.length}，本次总交易 ${stats.total}</p>
+      ${table(["来源文件", "账户", "Booking date", "Value date", "原始商户", "清洗后商户", "说明", "金额", "币种", "交易类型", "状态"], [renderPreviewRows(rows, state.renderedCount)])}
+      ${canShowMore ? '<button type="button" id="preview-more" class="secondary">继续显示</button>' : ""}
+    </section>
+    <section class="panel">
+      <label><input id="confirm-check" type="checkbox"> 我已经检查本次导入数据</label>
+      <div class="form-row">
+        <button id="confirm" ${state.data.can_confirm ? "disabled" : "disabled"}>统一确认导入</button>
+      </div>
+      ${state.data.can_confirm ? "" : '<p class="warning">存在解析失败、非 EUR 阻断条件或零交易文件，暂不能确认导入。</p>'}
+    </section>
+  </div>`;
+
+  document.querySelector("#preview-search").oninput = event => {
+    state.search = event.target.value;
+    state.renderedCount = state.chunkSize;
+    renderImportPreview(target, state);
+  };
+  document.querySelector("#preview-file").onchange = event => {
+    state.sourceFile = event.target.value;
+    state.renderedCount = state.chunkSize;
+    renderImportPreview(target, state);
+  };
+  document.querySelector("#preview-account").onchange = event => {
+    state.account = event.target.value;
+    state.renderedCount = state.chunkSize;
+    renderImportPreview(target, state);
+  };
+  document.querySelector("#preview-source-type").onchange = event => {
+    state.sourceType = event.target.value;
+    state.renderedCount = state.chunkSize;
+    renderImportPreview(target, state);
+  };
+  document.querySelector("#preview-status").onchange = event => {
+    state.status = event.target.value;
+    state.renderedCount = state.chunkSize;
+    renderImportPreview(target, state);
+  };
+  document.querySelector("#preview-sort").onchange = event => {
+    const [key, direction] = event.target.value.split(":");
+    state.sortKey = key;
+    state.sortDirection = direction;
+    renderImportPreview(target, state);
+  };
+  document.querySelectorAll("[data-quick]").forEach(button => {
+    button.onclick = () => {
+      state.quick = button.dataset.quick;
+      state.renderedCount = state.chunkSize;
+      renderImportPreview(target, state);
+    };
+  });
+  const moreButton = document.querySelector("#preview-more");
+  if (moreButton) {
+    moreButton.onclick = () => {
+      state.renderedCount += state.chunkSize;
+      renderImportPreview(target, state);
+    };
+  }
+}
+
 async function report(query = "") {
   const [summary, transactions, categories] = await Promise.all([
     request("/api/report" + query),
@@ -39,7 +229,7 @@ async function report(query = "") {
       <div class="card"><div class="label">净额</div><div class="metric ${summary.net >= 0 ? "good" : "bad"}">${money(summary.net)}</div></div>
       <div class="card"><div class="label">有效交易</div><div class="metric">${summary.count}</div></div>
     </div>
-    <section class="panel"><h2>支出分类</h2>${summary.categories.length ? summary.categories.map(x => `<div class="chart-row"><span>${x.name}</span><div class="bar" style="width:${(x.amount / max) * 100}%"></div><span>${money(x.amount)}</span></div>`).join("") : '<p class="label">暂无已统计的欧元交易。</p>'}</section>
+    <section class="panel"><h2>支出分类</h2>${summary.categories.length ? summary.categories.map(x => `<div class="chart-row"><span>${x.name}</span><div class="bar" style="width:${(x.amount / max) * 100}%"></div><span>${money(x.amount)}</span></div>`).join("") : '<p class="label">暂无已统计的 EUR 交易。</p>'}</section>
     <section class="panel"><h2>月度收支</h2>${table(["月份", "收入", "支出", "净额"], summary.monthly.map(x => `<tr><td>${x.month}</td><td class="amount-positive">${money(x.income)}</td><td class="amount-negative">${money(-x.expense)}</td><td>${money(x.income - x.expense)}</td></tr>`))}</section>
   </div>`;
   document.querySelector("#report-filter").onsubmit = event => {
@@ -68,13 +258,19 @@ async function importPage() {
     try {
       const data = await request("/api/import/preview", { method: "POST", body: form });
       target.classList.remove("hidden");
-      const baseline = data.baseline?.available
-        ? `<p class="${data.baseline.different ? "warning" : "notice"}">基准对比：${data.baseline.different ? "存在差异" : "一致"}</p>`
-        : "";
-      target.innerHTML = `<h2>批量导入预览</h2>${baseline}${data.previews.map(preview => `<article><h3>${preview.filename}</h3>${preview.duplicate_source ? '<p class="warning">该文件已导入，不会重复写入。</p>' : ""}<p>${preview.source_type}，识别 ${preview.total} 笔，欧元 ${preview.eur_transactions}，非欧元 ${preview.unsupported_currency}</p>${table(["日期", "商户", "金额", "币种"], preview.sample.map(item => `<tr><td>${item.booking_date}</td><td>${item.merchant_normalized || item.merchant}</td><td>${item.amount}</td><td>${item.currency}</td></tr>`))}</article>`).join("")}${data.blockers.map(item => `<p class="warning">${item.filename}：${item.error}</p>`).join("")}${data.can_confirm ? '<button id="confirm">统一确认导入</button>' : '<p class="warning">请先移除或解决异常文件。</p>'}`;
-      if (data.can_confirm) {
-        document.querySelector("#confirm").onclick = async () => {
-          const source = form.get("source_path");
+      const state = buildPreviewState(data);
+      state.renderedCount = state.chunkSize;
+      renderImportPreview(target, state);
+      const source = form.get("source_path");
+      const bindConfirm = () => {
+        const checkbox = document.querySelector("#confirm-check");
+        const button = document.querySelector("#confirm");
+        if (!checkbox || !button) return;
+        button.disabled = !checkbox.checked || !data.can_confirm;
+        checkbox.onchange = () => {
+          button.disabled = !checkbox.checked || !data.can_confirm;
+        };
+        button.onclick = async () => {
           const result = await request("/api/import/confirm", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -85,13 +281,14 @@ async function importPage() {
               })),
             }),
           });
-          target.insertAdjacentHTML("beforeend", result.results.map((item, index) => item.ok ? `<p class="notice">${data.previews[index].filename}：写入 ${item.inserted || 0} 笔${item.duplicate_source ? "（重复来源，已跳过）" : ""}。</p>` : `<p class="warning">${data.previews[index].filename}：${item.error}</p>`).join(""));
-          document.querySelector("#confirm").disabled = true;
+          target.insertAdjacentHTML("beforeend", `<section class="panel">${result.results.map((item, index) => item.ok ? `<p class="notice">${escapeHtml(data.previews[index].filename)}：写入 ${item.inserted || 0} 笔${item.duplicate_source ? "（重复来源，已跳过）" : ""}。</p>` : `<p class="warning">${escapeHtml(data.previews[index].filename)}：${escapeHtml(item.error)}</p>`).join("")}</section>`);
+          button.disabled = true;
         };
-      }
+      };
+      bindConfirm();
     } catch (error) {
       target.classList.remove("hidden");
-      target.innerHTML = `<p class="warning">${error.message}</p>`;
+      target.innerHTML = `<p class="warning">${escapeHtml(error.message)}</p>`;
     }
   };
 }
@@ -101,9 +298,9 @@ async function transactions(review = false) {
   const filtered = review ? rows.filter(x => x.category_status === "unclassified" || x.excluded_reason || x.unsupported_currency) : rows;
   const options = categories.map(c => `<option value="${c.id}">${c.level1} / ${c.level2} / ${c.level3}</option>`).join("");
   app.innerHTML = `<section class="panel">
-    <p class="label">${review ? "待复核包含未分类、排除统计、非欧元和自动对账建议。" : "人工修改分类会保留审计记录，重新导入不会覆盖。"}</p>
+    <p class="label">${review ? "待复核包含未分类、排除统计、非 EUR 和自动对账建议。" : "人工修改分类会保留审计记录，重新导入不会覆盖。"}</p>
     <label>搜索商户或说明<input id="tx-search" placeholder="输入关键词"></label>
-    <div id="tx-table">${table(["日期", "商户", "金额", "来源", "分类", "状态"], filtered.map(row => `<tr data-search="${(row.merchant + " " + row.description).toLowerCase()}"><td>${row.booking_date}</td><td title="${row.description}">${row.merchant}</td><td class="${row.amount_cents >= 0 ? "amount-positive" : "amount-negative"}">${money(row.amount_cents)}</td><td>${row.filename}</td><td><select data-id="${row.id}">${options}</select></td><td>${row.unsupported_currency ? "非欧元" : row.excluded_reason || row.category_status}</td></tr>`))}</div>
+    <div id="tx-table">${table(["日期", "商户", "金额", "来源", "分类", "状态"], filtered.map(row => `<tr data-search="${escapeHtml((row.merchant + " " + row.description).toLowerCase())}"><td>${row.booking_date}</td><td title="${escapeHtml(row.description)}">${escapeHtml(row.merchant)}</td><td class="${row.amount_cents >= 0 ? "amount-positive" : "amount-negative"}">${money(row.amount_cents)}</td><td>${escapeHtml(row.filename)}</td><td><select data-id="${row.id}">${options}</select></td><td>${row.unsupported_currency ? "非 EUR" : escapeHtml(row.excluded_reason || row.category_status)}</td></tr>`))}</div>
   </section>`;
   filtered.forEach(row => {
     const select = document.querySelector(`select[data-id="${row.id}"]`);
@@ -139,7 +336,7 @@ async function categories() {
         <button>添加分类</button>
       </form>
     </section>
-    <section class="panel">${table(["一级", "二级", "三级", "口径"], rows.map(row => `<tr><td>${row.level1}</td><td>${row.level2}</td><td>${row.level3}</td><td>${row.bucket}</td></tr>`))}</section>
+    <section class="panel">${table(["一级", "二级", "三级", "口径"], rows.map(row => `<tr><td>${escapeHtml(row.level1)}</td><td>${escapeHtml(row.level2)}</td><td>${escapeHtml(row.level3)}</td><td>${escapeHtml(row.bucket)}</td></tr>`))}</section>
   </div>`;
   document.querySelector("#cat-form").onsubmit = async event => {
     event.preventDefault();
@@ -156,5 +353,5 @@ async function categories() {
 const page = document.body.dataset.page;
 ({ "/": report, "/import": importPage, "/transactions": () => transactions(false), "/review": () => transactions(true), "/categories": categories }[page])()
   .catch(error => {
-    app.innerHTML = `<p class="warning">${error.message}</p>`;
+    app.innerHTML = `<p class="warning">${escapeHtml(error.message)}</p>`;
   });

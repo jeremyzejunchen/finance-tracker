@@ -172,6 +172,95 @@ class FinanceTrackerTests(unittest.TestCase):
         self.assertFalse(result["can_confirm"])
         self.assertEqual(1, len(result["blockers"]))
 
+    def test_preview_many_returns_full_transactions_not_only_sample(self):
+        header = "Date,Description,Currency,Gross,Name,Transaction ID,From Email Address\n"
+        rows = [
+            f"01.06.2026,Express Checkout Payment,EUR,-1.00,Shop {index},TX-{index},me@example.invalid"
+            for index in range(15)
+        ]
+        content = (header + "\n".join(rows) + "\n").encode("utf-8")
+        result = self.service.preview_many([
+            {"filename": "full-paypal.csv", "content": content},
+        ])
+        self.assertEqual(15, result["previews"][0]["total"])
+        self.assertEqual(15, len(result["transactions"]))
+        self.assertEqual(15, len({item["source_record_index"] for item in result["transactions"]}))
+
+    def test_preview_many_merges_multiple_files_and_includes_filename_and_token(self):
+        result = self.service.preview_many([
+            {"filename": "paypal-me.csv", "content": self._fixture_bytes("paypal_en.csv")},
+            {"filename": "trade.csv", "content": self._fixture_bytes("trade_republic.csv")},
+        ])
+        self.assertEqual(10, len(result["transactions"]))
+        filenames = {item["filename"] for item in result["transactions"]}
+        self.assertEqual({"paypal-me.csv", "trade.csv"}, filenames)
+        self.assertTrue(all(item["preview_token"] for item in result["transactions"]))
+
+    def test_preview_many_stats_are_correct(self):
+        result = self.service.preview_many([
+            {"filename": "trade.csv", "content": self._fixture_bytes("trade_republic.csv")},
+            {"filename": "paypal-me.csv", "content": self._fixture_bytes("paypal_en.csv")},
+        ])
+        self.assertEqual(len(result["transactions"]), result["stats"]["total"])
+        self.assertGreaterEqual(result["stats"]["warning_count"], 2)
+        self.assertEqual(1, result["stats"]["internal_transfer_count"])
+        self.assertEqual(0, result["stats"]["failed_transaction_count"])
+
+    def test_transaction_warnings_appear_in_complete_preview_response(self):
+        result = self.service.preview_many([
+            {"filename": "paypal-me.csv", "content": self._fixture_bytes("paypal_en.csv")},
+        ])
+        warning_rows = [item for item in result["transactions"] if item["warnings"]]
+        self.assertTrue(warning_rows)
+        self.assertIn("PP-7", {item["external_id"] for item in warning_rows})
+
+    def test_preview_does_not_write_to_database(self):
+        self.service.preview_many([
+            {"filename": "db-transactions.pdf", "content": self._fixture_text("db_transactions_layout.txt").encode("utf-8")},
+            {"filename": "paypal-me.csv", "content": self._fixture_bytes("paypal_en.csv")},
+        ])
+        self.assertEqual(0, self.db.table_count("transactions"))
+        self.assertEqual(0, self.db.table_count("source_files"))
+        self.assertEqual(0, self.db.table_count("import_batches"))
+
+    def test_confirm_many_only_accepts_existing_preview_tokens(self):
+        result = self.service.preview_many([
+            {"filename": "paypal-me.csv", "content": self._fixture_bytes("paypal_en.csv")},
+        ])
+        valid_token = result["previews"][0]["token"]
+        with self.assertRaises(ValueError):
+            self.service.confirm_many([{"token": valid_token}, {"token": "missing-token"}])
+
+    def test_large_preview_over_two_hundred_rows_is_not_truncated(self):
+        header = "Date,Description,Currency,Gross,Name,Transaction ID,From Email Address\n"
+        rows = [
+            f"01.06.2026,Express Checkout Payment,EUR,-1.00,Shop {index},TX-{index},me@example.invalid"
+            for index in range(205)
+        ]
+        content = (header + "\n".join(rows) + "\n").encode("utf-8")
+        result = self.service.preview_many([{"filename": "large-paypal.csv", "content": content}])
+        self.assertEqual(205, result["previews"][0]["total"])
+        self.assertEqual(205, len(result["transactions"]))
+
+    def test_duplicate_source_is_marked_in_preview_transactions(self):
+        preview = self.service.preview("paypal-me.csv", self._fixture_bytes("paypal_en.csv"))
+        self.service.confirm(preview.token)
+        result = self.service.preview_many([
+            {"filename": "paypal-me.csv", "content": self._fixture_bytes("paypal_en.csv")},
+        ])
+        self.assertTrue(result["previews"][0]["duplicate_source"])
+        self.assertTrue(all(item["duplicate_source"] for item in result["transactions"]))
+
+    def test_preview_response_keeps_original_transaction_data_when_filtered_copy_changes(self):
+        result = self.service.preview_many([
+            {"filename": "paypal-me.csv", "content": self._fixture_bytes("paypal_en.csv")},
+        ])
+        original = json.loads(json.dumps(result["transactions"]))
+        filtered = [dict(item) for item in result["transactions"] if item["warnings"]]
+        if filtered:
+            filtered[0]["merchant_raw"] = "CHANGED"
+        self.assertEqual(original, result["transactions"])
+
     def test_paypal_purchase_matches_bank_debit(self):
         self._insert_bank_paypal("auto", "PayPal Europe")
         paypal_preview = self.service.preview("paypal-me.csv", self._fixture_bytes("paypal_en.csv"))
