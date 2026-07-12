@@ -1515,13 +1515,14 @@ var transactions = RAW_TRANSACTIONS.map(function(t) {{
 /* ── Category hierarchy ── */
 var CAT_HIERARCHY = {{
   '固定支出': {{
-    subs: ['房租','电费','广电费','网费','话费','健康保险','其他保险','车险','汽车保养','健身']
+    subs: ['房租','电费','广电费','网费','话费','健康保险','其他保险',
+           {{name:'汽车/交通', subs:['车险','汽车保养','油费','停车费','汽车税','罚款']}},
+           '健身']
   }},
   '活动支出': {{
     subs: [
       '超市日用品','线上购物','线下购物','餐饮外食',
-      {{name:'汽车/交通', subs:['油费','停车费','汽车税','罚款','公共交通']}},
-      '宠物','医疗','旅行','服饰','娱乐','学费','市政缴费','网上充值','邮寄',
+      '公共交通','宠物','医疗','旅行','服饰','娱乐','学费','市政缴费','网上充值','邮寄',
       '家人转账','朋友转账','投资','押金退回','PayPal通用','其他'
     ]
   }},
@@ -1698,6 +1699,11 @@ function updateReport() {{
       var subName = typeof sub === 'string' ? sub : sub.name;
       var subSubs = typeof sub === 'string' ? null : sub.subs;
       var amt = catTotals[subName] || 0;
+      // 父分类显示子项合计
+      if (subSubs) {{
+        amt = 0;
+        subSubs.forEach(function(ss) {{ amt += (catTotals[ss] || 0); }});
+      }}
       if (amt === 0 && !subSubs) return;
       var pct = totalExpense > 0 ? (amt / totalExpense * 100).toFixed(1) : '0.0';
       var cnt = catCounts[subName] || 0;
