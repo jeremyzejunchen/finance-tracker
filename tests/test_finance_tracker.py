@@ -216,12 +216,13 @@ class FinanceTrackerTests(unittest.TestCase):
 
     def test_preview_does_not_write_to_database(self):
         self.service.preview_many([
-            {"filename": "db-transactions.pdf", "content": self._fixture_text("db_transactions_layout.txt").encode("utf-8")},
             {"filename": "paypal-me.csv", "content": self._fixture_bytes("paypal_en.csv")},
+            {"filename": "trade-republic.csv", "content": self._fixture_bytes("trade_republic.csv")},
         ])
         self.assertEqual(0, self.db.table_count("transactions"))
         self.assertEqual(0, self.db.table_count("source_files"))
         self.assertEqual(0, self.db.table_count("import_batches"))
+        self.assertEqual(0, self.db.table_count("import_runs"))
 
     def test_confirm_many_only_accepts_existing_preview_tokens(self):
         result = self.service.preview_many([
