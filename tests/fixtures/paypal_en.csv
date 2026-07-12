@@ -5,3 +5,5 @@ Date,Description,Currency,Gross,Name,Transaction ID,From Email Address
 04.06.2026,Express Checkout Payment,EUR,-30.00,Split Tender Shop,PP-4,me@example.invalid
 04.06.2026,Express Checkout Payment,EUR,-10.00,Split Tender Shop,PP-5,me@example.invalid
 05.06.2026,Mobile Payment,EUR,50.00,Friend Sender,PP-6,me@example.invalid
+06.06.2026,General Authorization for Merchant,EUR,-7.50,Real External Shop,PP-7,me@example.invalid
+07.06.2026,General Card Deposit Bonus Campaign,EUR,3.00,Promo Partner,PP-8,me@example.invalid

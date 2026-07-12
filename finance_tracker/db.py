@@ -219,6 +219,77 @@ class Database:
                     suggested += 1
         return {"automatic": automatic, "suggested": suggested}
 
+    def reconcile_refunds(self) -> dict[str, int]:
+        automatic = suggested = 0
+        with self.connect() as con:
+            rows = [dict(row) for row in con.execute(
+                """SELECT t.* FROM transactions t
+                WHERE t.unsupported_currency=0 AND t.excluded_reason != 'failed_transaction'"""
+            ).fetchall()]
+            for left in rows:
+                candidates = []
+                for right in rows:
+                    if left["id"] == right["id"]:
+                        continue
+                    if left["amount_cents"] + right["amount_cents"] != 0:
+                        continue
+                    if abs((date_from_iso(left["booking_date"]) - date_from_iso(right["booking_date"])).days) > 3:
+                        continue
+                    if left["excluded_reason"] == "matched_refund_pair" or right["excluded_reason"] == "matched_refund_pair":
+                        continue
+                    score = refund_match_score(left, right)
+                    if score <= 0:
+                        continue
+                    candidates.append((right, score))
+                if not candidates:
+                    continue
+                candidates.sort(key=lambda item: item[1], reverse=True)
+                top_score = candidates[0][1]
+                top = [item for item in candidates if item[1] == top_score]
+                status = "automatic" if len(top) == 1 and top_score >= 0.9 else "suggested"
+                target = top[0][0]
+                reason = "refund_amount_date_merchant_match" if top_score >= 0.9 else "refund_amount_date_possible_match"
+                con.execute(
+                    "INSERT OR IGNORE INTO reconciliations(left_transaction_id,right_transaction_id,kind,reason,confidence,status) VALUES(?,?,?,?,?,?)",
+                    (min(left["id"], target["id"]), max(left["id"], target["id"]), "refund_pair", reason, top_score, status),
+                )
+                if status == "automatic":
+                    con.execute("UPDATE transactions SET excluded_reason='matched_refund_pair' WHERE id IN (?,?) AND excluded_reason=''", (left["id"], target["id"]))
+                    automatic += 1
+                else:
+                    suggested += 1
+        return {"automatic": automatic, "suggested": suggested}
+
+    def reconciliation_rows(self) -> list[sqlite3.Row]:
+        with self.connect() as con:
+            return con.execute("SELECT * FROM reconciliations ORDER BY id").fetchall()
+
+    def table_count(self, table: str) -> int:
+        with self.connect() as con:
+            return int(con.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
+
 
 def now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def date_from_iso(raw: str):
+    from datetime import date
+    return date.fromisoformat(raw)
+
+
+def refund_match_score(left: dict, right: dict) -> float:
+    left_tokens = set(tokenize(left["merchant"] + " " + left["description"]))
+    right_tokens = set(tokenize(right["merchant"] + " " + right["description"]))
+    overlap = left_tokens & right_tokens
+    if overlap:
+        return 0.95
+    if left.get("external_id") and left.get("external_id") == right.get("external_id"):
+        return 0.95
+    return 0.6 if left["currency"] == right["currency"] else 0.0
+
+
+def tokenize(text: str) -> list[str]:
+    import re
+
+    return [token for token in re.findall(r"\w+", text.lower()) if len(token) > 3]

@@ -103,6 +103,7 @@ class FinanceService:
             results.append({"token": item["token"], "ok": True, **result})
         if any(not result["duplicate_source"] for result in written):
             self.db.reconcile_paypal()
+            self.db.reconcile_refunds()
         return {"results": results, "baseline": baseline}
 
     def confirm(self, token: str, source_path: str = "") -> dict:
@@ -115,6 +116,7 @@ class FinanceService:
         result = self.db.write_import({"path": source_path, "filename": preview.filename, "source_type": preview.source_type, "sha256": preview.file_hash}, prepared)
         if not result["duplicate_source"]:
             result["paypal_matching"] = self.db.reconcile_paypal()
+            result["refund_matching"] = self.db.reconcile_refunds()
         return result
 
     def _prepare(self, item: ParsedTransaction, source_type: str) -> dict:

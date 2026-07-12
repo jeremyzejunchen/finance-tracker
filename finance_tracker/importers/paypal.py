@@ -33,9 +33,15 @@ PAYPAL_TYPE_DE_TO_EN = {
     "Zahlung im Einzugsverfahren mit Zahlungsrechnung": "PreApproved Payment Bill User Payment",
 }
 
-PAYPAL_SUPPRESSED_KEYWORDS = (
-    "withdrawal", "abbuchung", "authorization", "autorisierung", "hold", "einbehaltung",
-    "deposit", "gutschrift", "reversal", "rückbuchung",
+PAYPAL_STRICT_INTERNAL_PATTERNS = (
+    "reversal of ach deposit",
+    "reversal of ach withdrawal transaction",
+    "account hold for open authorization",
+    "reversal of general account hold",
+    "ach-überweisung als zahlungsquelle für ausgleich von kontoguthaben",
+    "rückbuchung von ach-gutschrift",
+    "rückbuchung allgemeiner einbehaltung",
+    "einbehaltung für offene autorisierung",
 )
 
 
@@ -49,7 +55,8 @@ def parse_paypal_csv(content: bytes, filename: str, config: FinanceTrackerConfig
         description = PAYPAL_TYPE_DE_TO_EN.get(value(normalized, "beschreibung"), value(normalized, "description", "beschreibung"))
         if not description:
             description = value(normalized, "description", "beschreibung")
-        if is_internal_paypal_row(description):
+        internal_match, suspicious = classify_paypal_row(description)
+        if internal_match:
             continue
         amount = parse_amount(value(normalized, "gross", "brutto", "net", "netto"))
         booking_date = parse_date(value(normalized, "date", "datum"))
@@ -61,6 +68,7 @@ def parse_paypal_csv(content: bytes, filename: str, config: FinanceTrackerConfig
         transaction_type = description
         raw_payload = dict(row)
         raw_payload["matched_sender_email"] = raw_email
+        warnings = [f"Suspicious PayPal internal-like transaction type kept for review: {description}"] if suspicious else []
         result.append(
             ParsedTransaction(
                 booking_date=booking_date,
@@ -77,6 +85,7 @@ def parse_paypal_csv(content: bytes, filename: str, config: FinanceTrackerConfig
                 source_record_index=index,
                 source_record_key=external_id or f"{filename}:{index}",
                 raw=raw_payload,
+                warnings=warnings,
             )
         )
     if not result:
@@ -93,8 +102,20 @@ def find_sender_email(rows: list[dict[str, str]]) -> str:
     return ""
 
 
+def classify_paypal_row(description: str) -> tuple[bool, bool]:
+    normalized = normalize_paypal_description(description)
+    if normalized in {normalize_paypal_description(item) for item in PAYPAL_INTERNAL_TYPES}:
+        return True, False
+    if normalized in PAYPAL_STRICT_INTERNAL_PATTERNS:
+        return True, False
+    suspicious = any(token in normalized for token in ("authorization", "autorisierung", "hold", "einbehaltung", "deposit", "gutschrift", "withdrawal", "abbuchung"))
+    return False, suspicious
+
+
 def is_internal_paypal_row(description: str) -> bool:
+    return classify_paypal_row(description)[0]
+
+
+def normalize_paypal_description(description: str) -> str:
     lower = description.lower()
-    if description in PAYPAL_INTERNAL_TYPES:
-        return True
-    return any(token in lower for token in PAYPAL_SUPPRESSED_KEYWORDS)
+    return lower.replace("r眉", "rü").replace("脺", "ü")

@@ -1,60 +1,165 @@
 {
-  "db_transactions_layout": [
+  "deutsche_bank_transactions": [
     {
       "booking_date": "2026-06-01",
+      "value_date": "2026-06-02",
       "amount": "-12.50",
-      "merchant": "EXAMPLE MARKET",
+      "currency": "EUR",
+      "merchant_raw": "EXAMPLE MARKET",
+      "merchant_normalized": "EXAMPLE MARKET",
       "account": "Deutsche Bank",
+      "external_id": "",
       "transaction_type": "Debit Card Payment",
+      "source_format": "db_transactions",
       "is_internal_transfer": false,
+      "is_failed_transaction": false,
       "excluded_reason": ""
     },
     {
       "booking_date": "2026-06-03",
+      "value_date": "2026-06-03",
       "amount": "-42.10",
-      "merchant": "Utility Provider GmbH",
+      "currency": "EUR",
+      "merchant_raw": "Utility Provider GmbH",
+      "merchant_normalized": "Utility Provider GmbH",
       "account": "Deutsche Bank",
+      "external_id": "",
       "transaction_type": "SEPA-Direct Debit",
+      "source_format": "db_transactions",
       "is_internal_transfer": false,
+      "is_failed_transaction": false,
       "excluded_reason": ""
     },
     {
       "booking_date": "2026-06-03",
+      "value_date": "2026-06-03",
       "amount": "-12.50",
-      "merchant": "SECOND SHOP",
+      "currency": "EUR",
+      "merchant_raw": "SECOND SHOP",
+      "merchant_normalized": "SECOND SHOP",
       "account": "Deutsche Bank",
+      "external_id": "",
       "transaction_type": "Debit Card Payment",
+      "source_format": "db_transactions",
       "is_internal_transfer": false,
+      "is_failed_transaction": false,
       "excluded_reason": ""
     }
   ],
-  "db_account_statement_layout": [
+  "deutsche_bank_statement": [
     {
       "booking_date": "2026-06-06",
+      "value_date": "2026-06-05",
       "amount": "-10.00",
-      "merchant": "COFFEE SHOP BERLIN",
+      "currency": "EUR",
+      "merchant_raw": "COFFEE SHOP BERLIN",
+      "merchant_normalized": "COFFEE SHOP BERLIN",
       "account": "Deutsche Bank",
+      "external_id": "",
       "transaction_type": "Debit Card Payment",
+      "source_format": "db_account_statement",
       "is_internal_transfer": false,
+      "is_failed_transaction": false,
       "excluded_reason": ""
     },
     {
       "booking_date": "2026-06-07",
+      "value_date": "2026-06-07",
       "amount": "-99.00",
-      "merchant": "PAYM.ORDER JOHN DOE",
+      "currency": "EUR",
+      "merchant_raw": "PAYM.ORDER JOHN DOE",
+      "merchant_normalized": "PAYM.ORDER JOHN DOE",
       "account": "Deutsche Bank",
+      "external_id": "",
       "transaction_type": "SEPA Transfer (out)",
+      "source_format": "db_account_statement",
       "is_internal_transfer": true,
+      "is_failed_transaction": false,
       "excluded_reason": "internal_transfer"
     },
     {
       "booking_date": "2026-06-08",
+      "value_date": "2026-06-08",
       "amount": "-5.00",
-      "merchant": "FAILED MERCHANT",
+      "currency": "EUR",
+      "merchant_raw": "FAILED MERCHANT",
+      "merchant_normalized": "FAILED MERCHANT",
       "account": "Deutsche Bank",
+      "external_id": "",
       "transaction_type": "Rückgabe Lastschrift",
+      "source_format": "db_account_statement",
       "is_internal_transfer": false,
+      "is_failed_transaction": true,
       "excluded_reason": "failed_transaction"
     }
-  ]
+  ],
+  "paypal_english_kept_ids": ["PP-1", "PP-3", "PP-4", "PP-5", "PP-6", "PP-7", "PP-8"],
+  "paypal_german_kept_ids": ["PP-DE-1", "PP-DE-4"],
+  "trade_republic": [
+    {
+      "booking_date": "2026-06-01",
+      "value_date": "2026-06-01",
+      "amount": "-10.00",
+      "currency": "EUR",
+      "merchant_raw": "REAL MERCHANT",
+      "merchant_normalized": "REAL MERCHANT",
+      "account": "Trade Republic",
+      "external_id": "TR-1",
+      "transaction_type": "CARD_SUCCESSFUL_TRANSACTION",
+      "source_format": "trade_republic_csv",
+      "is_internal_transfer": false,
+      "is_failed_transaction": false,
+      "excluded_reason": ""
+    },
+    {
+      "booking_date": "2026-06-02",
+      "value_date": "2026-06-02",
+      "amount": "-50.00",
+      "currency": "EUR",
+      "merchant_raw": "Own Transfer",
+      "merchant_normalized": "Own Transfer",
+      "account": "Trade Republic",
+      "external_id": "TR-2",
+      "transaction_type": "TRANSFER_OUTBOUND",
+      "source_format": "trade_republic_csv",
+      "is_internal_transfer": true,
+      "is_failed_transaction": false,
+      "excluded_reason": "internal_transfer"
+    },
+    {
+      "booking_date": "2026-06-03",
+      "value_date": "2026-06-03",
+      "amount": "-25.00",
+      "currency": "EUR",
+      "merchant_raw": "REAL IBAN MERCHANT",
+      "merchant_normalized": "REAL IBAN MERCHANT",
+      "account": "Trade Republic",
+      "external_id": "TR-3",
+      "transaction_type": "TRANSFER_DIRECT_DEBIT_INBOUND",
+      "source_format": "trade_republic_csv",
+      "is_internal_transfer": false,
+      "is_failed_transaction": false,
+      "excluded_reason": ""
+    }
+  ],
+  "reconciliations": {
+    "paypal_bank_automatic": {
+      "kind": "paypal_bank",
+      "reason": "paypal_purchase_to_bank_debit",
+      "confidence": 0.95,
+      "status": "automatic"
+    },
+    "paypal_bank_suggested": {
+      "kind": "paypal_bank",
+      "reason": "paypal_purchase_to_bank_debit",
+      "confidence": 0.6,
+      "status": "suggested"
+    },
+    "refund_pair_automatic": {
+      "kind": "refund_pair",
+      "reason": "refund_amount_date_merchant_match",
+      "confidence": 0.95,
+      "status": "automatic"
+    }
+  }
 }

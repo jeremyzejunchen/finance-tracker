@@ -18,14 +18,14 @@ Status legend:
 | 5. Header/footer and Previous balance filtering | Inline rules | DB layout parsers | 完整实现 | Unknown PDF fallback now emits warning instead of silently replacing dedicated logic. |
 | 6. PayPal English and German CSV | Supported | `finance_tracker.importers.paypal` | 完整实现 | Both column variants covered by fixtures. |
 | 7. PayPal account ownership detection | Email and filename heuristics | Local config driven mapping | 有意改变行为 | Moved to `%LOCALAPPDATA%\FinanceTracker\config.json`; no private email hardcoding in repo. Covered by tests. |
-| 8. PayPal to bank debit matching | Legacy heuristic | `finance_tracker.reconciliation.paypal` | 部分实现 | Automatic match requires a single candidate; ambiguous matches stay suggested. |
-| 9. PayPal income and withdrawal matching | Legacy heuristic | `finance_tracker.reconciliation.paypal` | 部分实现 | Canonical/audit model exists, but fixture coverage is still narrower than legacy real-world history. |
-| 10. PayPal partial balance payment | Legacy balance-aware handling | Separate PayPal rows retained with reconciliation support | 部分实现 | Duplicate suppression is safer, but legacy balance-specific inference is not fully reproduced yet. |
+| 8. PayPal to bank debit matching | Legacy heuristic | `finance_tracker.reconciliation.paypal` | 部分实现 | Automatic match requires a single candidate; ambiguous matches stay suggested and do not auto-exclude either bank row. |
+| 9. PayPal income and withdrawal matching | Legacy heuristic | `finance_tracker.reconciliation.paypal` | 部分实现 | Audit model exists, but real multi-candidate income/withdrawal coverage is still limited in anonymous fixtures. |
+| 10. PayPal partial balance payment | Legacy balance-aware handling | Separate PayPal rows retained with reconciliation support | 部分实现 | Legacy balance inference for partial-balance payments is still not restored. |
 | 11. Trade Republic CASH transactions | Supported | `finance_tracker.importers.trade_republic` | 完整实现 | Non-CASH rows remain excluded from phase 1. |
 | 12. TR SEPA debit real merchant extraction | Regex extraction | `extract_tr_merchant` | 完整实现 | Covered by fixture. |
 | 13. Internal transfers across owned accounts | IBAN-based | Config-driven IBAN detection | 完整实现 | Supports DB/TR and multi-account cases through local config. |
-| 14. Refunds and reversals | Post-processing pair match | `finance_tracker.reconciliation.refunds` | 部分实现 | Cross-file matching works after import; cross-batch history coverage still needs broader fixtures. |
-| 15. Failed transactions | Heuristic flags | DB statement parser + excluded reason | 部分实现 | Explicit parser rule exists for statement text markers; more bank-specific variants may still exist in real statements. |
+| 14. Refunds and reversals | Post-processing pair match | `finance_tracker.reconciliation.refunds` + database reconciliation | 部分实现 | Cross-batch automatic pairing is implemented for single high-confidence candidates; ambiguous candidates are kept as `suggested`. |
+| 15. Failed transactions | Heuristic flags | DB statement parser + excluded reason | 部分实现 | Only currently known text markers are supported. |
 | 16. Duplicate files and overlapping statements dedup | Cache + post-process | SHA-256 file dedup + record-level fingerprints + explicit reconciliation | 有意改变行为 | Silent same-day same-amount bank dedup removed; overlapping statements now require explicit reconciliation rather than destructive suppression. |
 
 Canonical model decision for PayPal matching:
@@ -34,6 +34,13 @@ Canonical model decision for PayPal matching:
 - Excluded duplicate: matching Deutsche Bank PayPal debit row when confidence is automatic.
 - Merchant source: PayPal merchant, because it preserves the real counterparty instead of generic `PayPal`.
 - Audit trail: reconciliation row stores reason, confidence, and status between PayPal and bank transactions.
+
+Known phase-1 gaps that remain open:
+
+- PayPal partial-balance payments still do not restore legacy balance inference.
+- PayPal income/withdrawal scenarios still have limited anonymous multi-candidate coverage.
+- Failed-transaction detection only supports currently known text markers.
+- Unknown real Deutsche Bank PDF layouts may still exist; fallback emits a warning but is not layout parity.
 
 Sensitive data policy:
 
