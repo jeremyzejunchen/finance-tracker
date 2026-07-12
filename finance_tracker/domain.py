@@ -16,6 +16,11 @@ class ParsedTransaction:
     account: str = ""
     external_id: str = ""
     transaction_kind: str = "cash"
+    value_date: date | None = None
+    transaction_type: str = ""
+    source_format: str = ""
+    is_internal_transfer: bool = False
+    is_failed_transaction: bool = False
     raw: dict[str, Any] = field(default_factory=dict)
 
     def serializable(self) -> dict[str, Any]:
@@ -37,6 +42,7 @@ class ImportPreview:
 
     def summary(self) -> dict[str, Any]:
         supported = sum(item.currency == "EUR" for item in self.transactions)
+        dates = [item.booking_date for item in self.transactions]
         return {
             "token": self.token,
             "filename": self.filename,
@@ -44,6 +50,10 @@ class ImportPreview:
             "total": len(self.transactions),
             "eur_transactions": supported,
             "unsupported_currency": len(self.transactions) - supported,
+            "date_from": min(dates).isoformat() if dates else "",
+            "date_to": max(dates).isoformat() if dates else "",
+            "income_cents": sum(int(item.amount * 100) for item in self.transactions if item.currency == "EUR" and item.amount > 0),
+            "expense_cents": sum(int(item.amount * 100) for item in self.transactions if item.currency == "EUR" and item.amount < 0),
             "warnings": self.warnings,
             "duplicate_source": self.duplicate_source,
             "sample": [item.serializable() for item in self.transactions[:12]],

@@ -29,6 +29,7 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 PDF_DIR = SCRIPT_DIR / "银行流水"
 CACHE_FILE = SCRIPT_DIR / "bank_transactions.json"
 OUTPUT_FILE = SCRIPT_DIR / "bank_summary_2025.html"
+SIMPLE_OUTPUT = SCRIPT_DIR / "财务简表.html"
 
 # PayPal CSV 内部交易类型（不计入收支，新 CSV 格式 2026-07）
 # 新 CSV 无 Status/Balance Impact 列，类型在 Description (EN) / Beschreibung (DE) 中
@@ -75,40 +76,49 @@ OWN_IBANS = {
 
 EXPENSE_RULES = [
     # === 固定支出 ===
-    ("房租", ["HARALD WINDEL"]),
+    ("房租", ["HARALD WINDEL", "CATELLA REAL ESTATE"]),
     ("电费", ["E.ON ENERGIE", "STADTWERKE"]),
     ("广电费", ["RUNDFUNK"]),
     ("网费", ["TELEKOM DEUTSCHLAND"]),
     ("话费", ["VODAFONE"]),
     ("健康保险", ["TECHNIKER KRANKENKASSE"]),
-    ("其他保险", ["GOTHAER ALLGEMEINE", "HANSEMERKUR", "SIGNAL IDUNA"]),
-    ("车险", ["VOLKSWAGEN AUTOVERSICHERUNG", "HUK-COBURG", "SPARKASSEN DIREKTVERSICHERUNG",
-              "CONTINENTALE"]),
-    ("汽车保养", ["VW LEASING"]),
+    ("第三方责任险", ["GOTHAER ALLGEMEINE"]),
+    ("其他保险", ["SIGNAL IDUNA"]),
+    ("车险", ["VOLKSWAGEN AUTOVERSICHERUNG", "VOLKSWAGEN AUTOVERS.", "HUK-COBURG",
+              "SPARKASSEN DIREKTVERSICHERUNG", "CONTINENTALE"]),
+    ("汽车保养", ["VW LEASING", "SUEDHANNOVER"]),
     ("健身", ["FINION CAPITAL", "FITNESS FUTURE", "A.I. FITNESS"]),
     # === 活动支出 ===
-    ("超市日用品", ["KAUFLAND", "LIDL", "ALDI", "REWE", "DM-DROGERIE", "GO ASIA",
-                    "EDEKA", "NETTO", "ROSSMANN", "PENNY", "ACTION", "HANDELSHOF"]),
+    ("家居用品", ["IKEA", "OBI"]),
+    ("超市日用品", ["KAUFLAND", "LIDL", "ALDI", "REWE", "DM-DROGERIE", "DM DROGERIE", "GO ASIA",
+                    "EDEKA", "NETTO", "ROSSMANN", "PENNY", "ACTION", "HANDELSHOF",
+                    "TEGUT", "MIX MARKT", "TANIA MOHAMED"]),
     ("线上购物", ["AMAZON", "ALIEXPRESS", "EBAY", "TAOBAO", "ZALANDO", "UNIQLO",
                   "AMZN MKTP", "SP ORCHIDEEN-KLUSMAN", "SP CHINA MARKT CHEMN",
                   "NESPRESSO", "PAYPAL *ALIPAY", "DELOOX", "INFIGO", "OCHAMA", "DOCMORRIS",
                   "JOYBUY", "FERA", "JELLYCAT", "SMYTHS", "THG BEAUTY", "LOOKFANTASTIC",
-                  "VINTED", "KLEIDERKREISEL", "HERMANN COMMERCE"]),
-    ("线下购物", ["OBI", "IKEA", "PRIMARK", "DOUGLAS", "TEGUT", "MIX MARKT"]),
+                  "VINTED", "KLEIDERKREISEL", "HERMANN COMMERCE",
+                  # 个人商家
+                  "YI HE", "BIRONG XU", "DENNIS SCHWARZE", "JULIETTE OWCZAREK",
+                  "ANGELINA JOVANOVIC", "FAN SHI"]),
+    ("线下购物", ["PRIMARK", "DOUGLAS"]),
     ("餐饮外食", ["KFC", "MCDONALD", "BURGER KING", "UBER", "LIEFERANDO",
-                  "TANIA MOHAMED", "UMG GASTRONOMIE", "CAFE", "LUTZ MICHAEL",
+                  "UMG GASTRONOMIE", "CAFE", "LUTZ MICHAEL",
                   "ROXX", "DOOBOO THE GLEN", "CHILICHILLEN HOTPOT", "EISCAFE",
                   "SPC.MAMAME", "COCO TEA FRESH", "PAMPAS GENT", "THE OLIVE STREETFOOD",
                   "PAVILLON STADT"]),
     ("油费", ["ARAL", "SHELL", "TOTAL", "BFT", "PFEFFER", "STAR GOTTINGEN",
-              "OIL 413", "CLASSIC TANKSTELLE", "ESSO", "LEO HERZBERG"]),
-    ("停车费", ["PARKSTER", "PARKDEPOT", "CONTRIPARK", "PARKAUTOMATEN", "PARKEN",
+              "OIL 413", "CLASSIC TANKSTELLE", "ESSO", "LEO HERZBERG",
+              "JET-TANKSTELLE"]),
+    ("停车费", ["PARKSTER", "PARKDEPOT", "CONTRIPARK", "CONTIPARK", "PARKAUTOMATEN", "PARKEN",
                 "PARKING", "BEZIRKSAMT CHARLOTTENBURG"]),
     ("汽车税", ["BUNDESKASSE", "KFZ-STEUER"]),
     ("罚款", ["STADT KASSEL VERKEHRSUEBERW"]),
     ("公共交通", ["DEUTSCHE BAHN", "DB VERTRIEB", "DE LIJN"]),
-    ("宠物", ["FRESSNAPF", "ZOOPLUS", "ZOOROYAL", "TIERARZT", "TIERAERZTLICHES",
-              "DR. MED. VET. WYSTUB", "CATAMORE", "FOX4PETS", "GRANATAPET", "ZOOLAND"]),
+    ("宠物保险", ["HANSEMERKUR"]),
+    ("宠物食品", ["FRESSNAPF", "ZOOPLUS", "ZOOROYAL", "CATAMORE", "FOX4PETS",
+                  "GRANATAPET", "ZOOLAND"]),
+    ("兽医", ["TIERARZT", "TIERAERZTLICHES", "DR. MED. VET. WYSTUB"]),
     ("医疗", ["APOTHEKE", "KRANKENHAUS", "SANITATSHAUS", "DRK", "ARBEITER-SAMARITER",
               "SHOP APOTHEKE", "APO PHARMACY"]),
     ("旅行", ["BOOKING", "AIRBNB", "LUFTHANSA", "HOLIDAY INN", "CHECK24",
@@ -121,19 +131,23 @@ EXPENSE_RULES = [
     ("邮寄", ["DEUTSCHE POST", "DPD", "HERMES"]),
     ("家人转账", ["RUI CHENG", "ZEJUN CHEN"]),
     ("朋友转账", ["ABDUL", "YANG SUN", "PAYPAL *CATHERINE2013",
-                  "YUXIAO LUO", "SIWEN YUAN", "YI HE", "RUI GUO", "BIRONG XU",
-                  "DENNIS SCHWARZE", "JULIETTE OWCZAREK", "TZU-YUEH CHEN"]),
+                  "YUXIAO LUO", "SIWEN YUAN", "RUI GUO", "TZU-YUEH CHEN",
+                  "YAOBIN WU"]),
     ("投资", ["SPACEX"]),
-    ("押金退回", ["CATELLA REAL ESTATE"]),
 ]
 
 INCOME_RULES = [
     ("工资", ["DRES. DEKOWSKI, RENNER"]),
     ("大学薪资", ["GEORG-AUGUST-UNIVERSITAT", "UMG", "GOTTINGEN STIFTUNG"]),
-    ("奖学金/津贴", ["CATELLA REAL ESTATE", "SPARKASSEN DIREKTVERSICHERUNG"]),
-    ("二手收入", ["MANGOPAY", "DIANA BUCK", "KARIN MOLLBERG"]),
+    ("奖学金/津贴", ["SPARKASSEN DIREKTVERSICHERUNG"]),
+    ("二手收入", ["MANGOPAY", "DIANA BUCK", "KARIN MOLLBERG", "CHUYAO WAN"]),
     ("投资收入", ["TESLA", "CORE S&P 500", "NETFLIX", "SAVEBACK", "STOCKPERK"]),
-    ("利息收入", ["INTEREST PAYMENT", "CREDIT INTEREST", "LEIPZIG ACCOUNT"]),
+    ("利息收入", ["INTEREST PAYMENT", "CREDIT INTEREST", "LEIPZIG ACCOUNT",
+                  "BALANCE OF SETTLEMENT ITEMS"]),
+    ("朋友转账", ["ABDUL", "YANG SUN", "PAYPAL *CATHERINE2013",
+                  "YUXIAO LUO", "SIWEN YUAN", "RUI GUO", "TZU-YUEH CHEN",
+                  "YAOBIN WU"]),
+    ("家人转账", ["RUI CHENG", "ZEJUN CHEN"]),
 ]
 
 # ── PDF 格式检测 ────────────────────────────────────────────────────────────
@@ -744,7 +758,7 @@ def parse_amount_f2(s: str) -> float:
 # ── 分类 ─────────────────────────────────────────────────────────────────────
 
 def categorize(merchant: str, amount: float, details: str = "") -> str:
-    upper = merchant.upper()
+    upper = re.sub(r'\s+', ' ', merchant.upper()).strip()
     if amount > 0:
         # 收入：匹配 INCOME_RULES
         for cat, keywords in INCOME_RULES:
@@ -957,6 +971,7 @@ def build_report(transactions: list[dict]) -> str:
     # ── 交易明细表行 ──
     table_rows = []
     accounts = sorted(set(t.get('account', 'DB') for t in txns))
+    txn_idx = 0  # 用于 JS 端 data-idx 定位
     for t in reversed(txns):
         if t.get('is_failed_transaction'):
             continue  # 失败交易不出现在交易明细中
@@ -965,14 +980,16 @@ def build_report(transactions: list[dict]) -> str:
             css += ' internal'
         cat = t.get('category', '其他')
         acct = t.get('account', 'DB')
+        merchant_attr = t.get("merchant","")[:55].replace('"', '&quot;')
         table_rows.append(
-            f'<tr class="{css}" data-category="{cat}" data-account="{acct}" data-internal="{1 if t.get("is_internal_transfer") else 0}" data-failed="{1 if t.get("is_failed_transaction") else 0}" data-date="{t["booking_date"]}">'
+            f'<tr class="{css}" data-category="{cat}" data-account="{acct}" data-internal="{1 if t.get("is_internal_transfer") else 0}" data-failed="{1 if t.get("is_failed_transaction") else 0}" data-date="{t["booking_date"]}" data-idx="{txn_idx}" data-merchant="{merchant_attr}">'
             f'<td>{t["booking_date"]}</td>'
             f'<td>{t.get("merchant","")[:55]}</td>'
-            f'<td><span class="tag">{cat}</span></td>'
+            f'<td><span class="tag cat-editable" title="点击修改分类">{cat}</span></td>'
             f'<td class="amt" data-amount="{t["amount"]}">{t["amount"]:+,.2f}</td>'
             f'</tr>'
         )
+        txn_idx += 1
 
     cat_counts = defaultdict(int)
     for t in txns:
@@ -1221,6 +1238,17 @@ tr.inc .amt{{color:var(--green)}}tr.exp .amt{{color:var(--red)}}
   display:inline-block;padding:2px 10px;border-radius:12px;font-size:.76rem;
   background:#f1f5f9;color:var(--text2);font-weight:500;
 }}
+.tag.cat-editable{{
+  cursor:pointer;transition:background .15s,color .15s;
+}}
+.tag.cat-editable:hover{{
+  background:var(--accent);color:#fff;
+}}
+.cat-edit-select{{
+  padding:2px 4px;font-size:.76rem;border-radius:4px;
+  border:1px solid var(--accent);background:var(--surface);color:var(--text);
+  max-width:110px;cursor:pointer;
+}}
 
 .tbl-wrap{{max-height:600px;overflow-y:auto;border-radius:0 0 var(--radius) var(--radius)}}
 
@@ -1464,10 +1492,19 @@ tr.inc .amt{{color:var(--green)}}tr.exp .amt{{color:var(--red)}}
 <button id="add-desc-tag" style="padding:6px 14px;background:var(--accent);color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:.85rem">添加</button>
 </div>
 
+<h2 style="margin-top:24px">分类审核：待定规则</h2>
+<p style="font-size:.8rem;color:var(--text2);margin-bottom:12px">在交易表中点击分类标签修改后自动记录。导出后可用于 --apply-overrides 固化。</p>
+<div id="bank-pending-rules" class="cat-list"></div>
+
 <h2 style="margin-top:24px">数据导出</h2>
-<button id="export-json" style="padding:10px 20px;background:var(--green);color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:.9rem;margin-top:8px">
-<i class="fas fa-download"></i> 导出为 JSON
+<div style="display:flex;gap:12px;flex-wrap:wrap;margin-top:8px">
+<button id="export-overrides" style="padding:10px 20px;background:var(--accent);color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:.9rem">
+<i class="fas fa-file-export"></i> 导出分类覆盖
 </button>
+<button id="export-json" style="padding:10px 20px;background:var(--green);color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:.9rem">
+<i class="fas fa-download"></i> 导出全部 JSON
+</button>
+</div>
 </div>
 </div>
 
@@ -1515,19 +1552,19 @@ var transactions = RAW_TRANSACTIONS.map(function(t) {{
 /* ── Category hierarchy ── */
 var CAT_HIERARCHY = {{
   '固定支出': {{
-    subs: ['房租','电费','广电费','网费','话费','健康保险','其他保险',
+    subs: ['房租','电费','广电费','网费','话费','健康保险','第三方责任险','其他保险',
            {{name:'汽车/交通', subs:['车险','汽车保养','油费','停车费','汽车税','罚款']}},
            '健身']
   }},
   '活动支出': {{
     subs: [
-      '超市日用品','线上购物','线下购物','餐饮外食',
-      '公共交通','宠物','医疗','旅行','服饰','娱乐','学费','市政缴费','网上充值','邮寄',
-      '家人转账','朋友转账','投资','押金退回','PayPal通用','其他'
+      {{name:'线下购物', subs:['家居用品','超市日用品']}}, '线上购物','餐饮外食',
+      '公共交通',{{name:'宠物', subs:['宠物保险','宠物食品','兽医']}},'医疗','旅行','服饰','娱乐','学费','市政缴费','网上充值','邮寄',
+      '家人转账','朋友转账','投资','PayPal通用','其他'
     ]
   }},
   '收入': {{
-    subs: ['工资','大学薪资','奖学金/津贴','二手收入','投资收入','利息收入','其他收入']
+    subs: ['工资','大学薪资','奖学金/津贴','二手收入','投资收入','利息收入','朋友转账','家人转账','退款','其他收入']
   }}
 }};
 
@@ -1623,6 +1660,83 @@ function getCellVal(row,col){{
   if(col===3)return parseFloat(row.cells[3].dataset.amount)||0;
   return row.cells[col].textContent.trim();
 }}
+
+/* ── Category inline edit ── */
+var catEditOpen = null;
+function closeCatEdit() {{
+  if (catEditOpen) {{
+    var sel = catEditOpen.sel;
+    var origTag = document.createElement('span');
+    origTag.className = 'tag cat-editable';
+    origTag.title = '点击修改分类';
+    origTag.textContent = catEditOpen.origCat;
+    sel.replaceWith(origTag);
+    catEditOpen = null;
+  }}
+}}
+
+tbody.addEventListener('click', function(e) {{
+  var tag = e.target.closest('.cat-editable');
+  if (!tag) {{ closeCatEdit(); return; }}
+  if (catEditOpen && catEditOpen.tag === tag) return; // already editing this one
+  closeCatEdit();
+
+  var row = tag.closest('tr');
+  var idx = parseInt(row.dataset.idx);
+  if (isNaN(idx) || idx < 0 || idx >= transactions.length) return;
+  var txn = transactions[idx];
+  var allCats = txn.type === 'expense' ? expCats : incCats;
+
+  var sel = document.createElement('select');
+  sel.className = 'cat-edit-select';
+  sel.style.cssText = 'padding:2px 4px;font-size:.78rem;border-radius:4px;border:1px solid var(--accent);background:var(--surface);color:var(--text);max-width:110px';
+  allCats.forEach(function(c) {{
+    var opt = document.createElement('option');
+    opt.value = c; opt.textContent = c;
+    if (c === txn.category) opt.selected = true;
+    sel.appendChild(opt);
+  }});
+
+  tag.replaceWith(sel);
+  catEditOpen = {{ tag: tag, sel: sel, origCat: txn.category, row: row, idx: idx }};
+  sel.focus();
+
+  sel.addEventListener('change', function() {{
+    var newCat = sel.value;
+    if (newCat === catEditOpen.origCat) {{ closeCatEdit(); return; }}
+    txn.category = newCat;
+    row.dataset.category = newCat;
+    var merchant = txn.merchant.toUpperCase();
+    if (merchant) {{
+      categoryOverrides[merchant] = newCat;
+      pendingRules[merchant] = newCat;
+      saveOverrides();
+    }}
+    // Replace select with new tag
+    var newTag = document.createElement('span');
+    newTag.className = 'tag cat-editable';
+    newTag.title = '点击修改分类';
+    newTag.textContent = newCat;
+    sel.replaceWith(newTag);
+    catEditOpen = null;
+    // Refresh all views
+    updateReport();
+    applyFilters();
+    updateAllCharts();
+    renderPendingRules();
+    notify('分类已更新: ' + txn.merchant + ' → ' + newCat);
+  }});
+
+  sel.addEventListener('blur', function() {{
+    setTimeout(function() {{
+      if (catEditOpen && catEditOpen.sel === sel) closeCatEdit();
+    }}, 200);
+  }});
+
+  sel.addEventListener('keydown', function(e) {{
+    if (e.key === 'Escape') {{ closeCatEdit(); }}
+  }});
+}});
 
 /* ── Combined filter ── */
 function applyFilters(){{
@@ -2222,6 +2336,34 @@ var expCats = prefs.expCats || defaultExpCats.slice();
 var incCats = prefs.incCats || defaultIncCats.slice();
 var descTags = prefs.descTags || defaultTags.slice();
 var fixedRules = prefs.fixedRules || [];
+var categoryOverrides = prefs.categoryOverrides || {{}};
+var pendingRules = prefs.pendingRules || {{}};
+
+// Apply stored category overrides to transactions
+Object.keys(categoryOverrides).forEach(function(merchant) {{
+  var mUpper = merchant.toUpperCase();
+  transactions.forEach(function(t) {{
+    if (t.merchant.toUpperCase() === mUpper) {{
+      t.category = categoryOverrides[merchant];
+    }}
+  }});
+}});
+// Update DOM rows to match overridden categories
+rows.forEach(function(r) {{
+  var idx = parseInt(r.dataset.idx);
+  if (idx >= 0 && idx < transactions.length) {{
+    var cat = transactions[idx].category;
+    r.dataset.category = cat;
+    var tag = r.querySelector('.tag');
+    if (tag) tag.textContent = cat;
+  }}
+}});
+
+function saveOverrides() {{
+  prefs.categoryOverrides = categoryOverrides;
+  prefs.pendingRules = pendingRules;
+  savePrefs(prefs);
+}}
 
 /* ── Settings: category list render ── */
 function renderCatList(containerId, cats, type) {{
@@ -2243,6 +2385,7 @@ function renderAllSettings() {{
   renderCatList('bank-income-cats', incCats, 'income');
   renderFixedRules();
   renderTags();
+  renderPendingRules();
 }}
 renderAllSettings();
 
@@ -2381,12 +2524,55 @@ document.getElementById('export-json').addEventListener('click', function() {{
   notify('数据已导出');
 }});
 
+/* ── Export category overrides ── */
+document.getElementById('export-overrides').addEventListener('click', function() {{
+  var data = {{categoryOverrides: categoryOverrides, pendingRules: pendingRules}};
+  var blob = new Blob([JSON.stringify(data, null, 2)], {{type: 'application/json'}});
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'category_overrides.json';
+  a.click();
+  notify('分类覆盖已导出: category_overrides.json');
+}});
+
+/* ── Pending rules management ── */
+function renderPendingRules() {{
+  var container = document.getElementById('bank-pending-rules');
+  if (!container) return;
+  var keys = Object.keys(pendingRules);
+  if (keys.length === 0) {{
+    container.innerHTML = '<div style="padding:8px;color:var(--text2);font-size:.85rem">暂无待定规则。在交易表中点击分类标签修改后自动生成。</div>';
+    return;
+  }}
+  container.innerHTML = '';
+  keys.forEach(function(merchant) {{
+    var cat = pendingRules[merchant];
+    var div = document.createElement('div');
+    div.className = 'cat-item';
+    div.innerHTML = '<span><strong>' + merchant + '</strong> → ' + cat + '</span>' +
+      '<button class="del-btn" data-merchant="' + merchant + '"><i class="fas fa-trash"></i></button>';
+    container.appendChild(div);
+  }});
+}}
+
+document.getElementById('bank-pending-rules').addEventListener('click', function(e) {{
+  var btn = e.target.closest('.del-btn');
+  if (!btn) return;
+  var merchant = btn.dataset.merchant;
+  delete pendingRules[merchant];
+  saveOverrides();
+  renderPendingRules();
+  notify('规则已删除: ' + merchant);
+}});
+
 /* ── Persist & notify helpers ── */
 function persistAndRender() {{
   prefs.expCats = expCats;
   prefs.incCats = incCats;
   prefs.descTags = descTags;
   prefs.fixedRules = fixedRules;
+  prefs.categoryOverrides = categoryOverrides;
+  prefs.pendingRules = pendingRules;
   savePrefs(prefs);
   renderAllSettings();
 }}
@@ -2509,6 +2695,7 @@ def main():
     parser.add_argument('--force', action='store_true', help='强制重新解析所有 PDF')
     parser.add_argument('--output', type=str, default=None, help='输出 HTML 路径')
     parser.add_argument('--month', type=str, default=None, help='仅输出指定月份 (YYYY-MM)')
+    parser.add_argument('--apply-overrides', type=str, default=None, help='应用分类覆盖 JSON 文件（从 HTML 设置页签导出）')
     args = parser.parse_args()
 
     pdf_files = sorted(PDF_DIR.glob("*.pdf"))
@@ -2591,10 +2778,61 @@ def main():
             if not t.get('category'):
                 t['category'] = categorize(t.get('merchant', ''), t['amount'], t.get('details', ''))
 
+        # 后处理分类修正：换汇 / 内部转账
+        for t in all_txns:
+            if t.get('is_internal_transfer'):
+                if '换汇' in t.get('merchant', ''):
+                    t['category'] = '换汇'
+                else:
+                    t['category'] = '内部转账'
+
+        # 退款检测：类型信号 + 支出商户正向金额
+        for t in all_txns:
+            if t.get('category') != '其他收入' or t['amount'] <= 0:
+                continue
+            txn_type = t.get('type', '')
+            merchant_upper = t.get('merchant', '').upper()
+            # 信号1: 类型明确是退款
+            if 'Rückgabe' in txn_type or txn_type == 'Payment Refund':
+                t['category'] = '退款'
+                continue
+            # 信号2: PayPal Europe 正向 SEPA → 退款
+            if 'PAYPAL EUROPE' in merchant_upper:
+                t['category'] = '退款'
+                continue
+            # 信号3: 金额为正但商户匹配支出规则 → 退款
+            for _cat, keywords in EXPENSE_RULES:
+                for kw in keywords:
+                    if kw in merchant_upper:
+                        t['category'] = '退款'
+                        break
+                if t['category'] == '退款':
+                    break
+
         # 存缓存
         save_cache(all_txns)
         internal_count = sum(1 for t in all_txns if t.get('is_internal_transfer'))
         print(f"[OK] 缓存已保存 ({len(all_txns)} 笔，其中 {internal_count} 笔内部转账)")
+
+    # 应用分类覆盖（--apply-overrides）
+    if args.apply_overrides:
+        import json as _json2
+        override_path = Path(args.apply_overrides)
+        if not override_path.exists():
+            print(f"[错误] 覆盖文件不存在: {override_path}")
+            sys.exit(1)
+        with open(override_path, 'r', encoding='utf-8') as f:
+            overrides_data = _json2.load(f)
+        overrides = overrides_data.get('categoryOverrides', {})
+        applied = 0
+        for t in all_txns:
+            merchant_upper = t.get('merchant', '').upper()
+            if merchant_upper in overrides:
+                new_cat = overrides[merchant_upper]
+                if t.get('category') != new_cat:
+                    t['category'] = new_cat
+                    applied += 1
+        print(f"[OK] 分类覆盖已应用: {applied} 笔交易重新分类")
 
     # 按月份筛选
     if args.month:
@@ -2629,6 +2867,296 @@ def main():
     total_out = abs(sum(t['amount'] for t in all_txns if t['amount'] < 0))
     print(f"\n[OK] report generated: {output}")
     print(f"   income: EUR {total_in:,.2f}  expense: EUR {total_out:,.2f}  net: EUR {total_in-total_out:+,.2f}")
+
+    # 生成简表
+    simple_html = build_simple_report(all_txns)
+    SIMPLE_OUTPUT.write_text(simple_html, encoding='utf-8')
+    print(f"[OK] simple report: {SIMPLE_OUTPUT}")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 简表：仅筛选 + KPI + 分类明细 + 交易明细
+# ═══════════════════════════════════════════════════════════════════════════════
+
+def build_simple_report(txns: list[dict]) -> str:
+    """生成轻量财务简表 HTML（无图表、无页签）。"""
+    ext_txns = [t for t in txns if not t.get('is_internal_transfer') and not t.get('is_failed_transaction')]
+    ext_txns.sort(key=lambda t: t['booking_date'], reverse=True)
+
+    txn_json = json.dumps([{
+        'date': t['booking_date'],
+        'type': 'income' if t['amount'] > 0 else 'expense',
+        'category': t.get('category', '其他'),
+        'amount': t['amount'],
+        'merchant': t.get('merchant', ''),
+        'account': t.get('account', 'DB'),
+    } for t in ext_txns], ensure_ascii=False)
+
+    years = sorted({t['booking_date'][:4] for t in ext_txns})
+    categories = sorted({t.get('category', '其他') for t in ext_txns})
+
+    return f'''<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>财务简表</title>
+<style>
+:root {{
+  --bg: #f5f5f5; --card: #fff; --text: #222; --text2: #666; --border: #e0e0e0;
+  --accent: #3b82f6; --income: #10b981; --expense: #ef4444;
+}}
+[data-theme="dark"] {{
+  --bg: #1a1a2e; --card: #222238; --text: #eee; --text2: #999; --border: #333;
+}}
+* {{ margin:0; padding:0; box-sizing:border-box; }}
+body {{ font:14px/1.5 system-ui,-apple-system,sans-serif; background:var(--bg); color:var(--text); padding:16px; }}
+.container {{ max-width:1200px; margin:0 auto; }}
+h1 {{ font-size:1.2rem; margin-bottom:12px; }}
+
+/* Theme toggle */
+.theme-btn {{ position:fixed; top:12px; right:12px; width:32px; height:32px; border-radius:50%; border:1px solid var(--border); background:var(--card); color:var(--text); cursor:pointer; font-size:16px; z-index:100; }}
+
+/* Filters */
+.filters {{ display:flex; flex-wrap:wrap; gap:8px; margin-bottom:12px; align-items:center; }}
+.filters select, .filters input {{ padding:6px 10px; border:1px solid var(--border); border-radius:6px; font-size:.85rem; background:var(--card); color:var(--text); min-width:100px; }}
+.filters input[type="number"] {{ width:100px; }}
+
+/* KPI */
+.kpi {{ display:grid; grid-template-columns:repeat(3,1fr); gap:12px; margin-bottom:16px; }}
+.kpi-card {{ background:var(--card); border-radius:10px; padding:14px 18px; border:1px solid var(--border); }}
+.kpi-card .label {{ font-size:.75rem; color:var(--text2); margin-bottom:4px; }}
+.kpi-card .value {{ font-size:1.5rem; font-weight:700; }}
+.kpi-card .value.income {{ color:var(--income); }}
+.kpi-card .value.expense {{ color:var(--expense); }}
+
+/* Tables */
+.table-wrap {{ background:var(--card); border-radius:10px; border:1px solid var(--border); overflow:hidden; margin-bottom:16px; }}
+.table-wrap h2 {{ font-size:.9rem; padding:12px 16px; border-bottom:1px solid var(--border); background:var(--bg); }}
+table {{ width:100%; border-collapse:collapse; font-size:.85rem; }}
+th {{ text-align:left; padding:8px 16px; border-bottom:1px solid var(--border); color:var(--text2); font-weight:600; cursor:pointer; white-space:nowrap; user-select:none; }}
+th:hover {{ color:var(--accent); }}
+td {{ padding:7px 16px; border-bottom:1px solid var(--border); }}
+tr:last-child td {{ border-bottom:none; }}
+.amount {{ text-align:right; font-variant-numeric:tabular-nums; }}
+.income {{ color:var(--income); }}
+.expense {{ color:var(--expense); }}
+.pct-bar {{ display:inline-block; height:4px; border-radius:2px; margin-left:6px; vertical-align:middle; }}
+
+/* pagination */
+.pagination {{ display:flex; justify-content:center; gap:4px; padding:12px; }}
+.pagination button {{ padding:4px 10px; border:1px solid var(--border); border-radius:4px; background:var(--card); color:var(--text); cursor:pointer; font-size:.8rem; }}
+.pagination button.active {{ background:var(--accent); color:#fff; border-color:var(--accent); }}
+.pagination button:disabled {{ opacity:.4; cursor:default; }}
+
+.info-bar {{ font-size:.8rem; color:var(--text2); padding:8px 16px; }}
+</style>
+</head>
+<body>
+<button class="theme-btn" onclick="toggleTheme()" title="切换主题">☀</button>
+<div class="container">
+<h1>财务简表</h1>
+
+<div class="filters" id="filters">
+  <select id="f-year"><option value="">全部年份</option></select>
+  <select id="f-month"><option value="">全部月份</option></select>
+  <select id="f-category"><option value="">全部分类</option></select>
+  <input id="f-search" placeholder="搜索商户/描述…" type="search">
+  <input id="f-min" type="number" step="0.01" placeholder="金额≥">
+  <input id="f-max" type="number" step="0.01" placeholder="金额≤">
+  <button onclick="resetFilters()" style="padding:6px 12px;border:1px solid var(--border);border-radius:6px;background:var(--card);color:var(--text);cursor:pointer;">重置</button>
+</div>
+
+<div class="kpi" id="kpi"></div>
+
+<div class="table-wrap">
+  <h2>分类明细</h2>
+  <table><thead><tr>
+    <th onclick="sortCat('name')">分类</th>
+    <th onclick="sortCat('total')" style="text-align:right">金额</th>
+    <th onclick="sortCat('pct')" style="text-align:right">占比</th>
+    <th onclick="sortCat('count')" style="text-align:right">笔数</th>
+  </tr></thead><tbody id="cat-body"></tbody></table>
+</div>
+
+<div class="table-wrap">
+  <h2>交易明细 <span class="info-bar" id="txn-info"></span></h2>
+  <table><thead><tr>
+    <th onclick="sortTxn('date')">日期</th>
+    <th onclick="sortTxn('merchant')">商户</th>
+    <th onclick="sortTxn('category')">分类</th>
+    <th onclick="sortTxn('amount')" style="text-align:right">金额</th>
+  </tr></thead><tbody id="txn-body"></tbody></table>
+  <div class="pagination" id="txn-pages"></div>
+</div>
+</div>
+
+<script>
+var DATA = {txn_json};
+var PAGE_SIZE = 50;
+
+// Init filters
+(function() {{
+  var years = [...new Set(DATA.map(function(t){{return t.date.slice(0,4)}}))].sort();
+  var sel = document.getElementById('f-year');
+  years.forEach(function(y){{ sel.appendChild(new Option(y,y)); }});
+  var cats = [...new Set(DATA.map(function(t){{return t.category}}))].sort();
+  var csel = document.getElementById('f-category');
+  cats.forEach(function(c){{ csel.appendChild(new Option(c,c)); }});
+  updateMonthOptions();
+}})();
+
+document.getElementById('f-year').addEventListener('change', updateMonthOptions);
+
+function updateMonthOptions() {{
+  var y = document.getElementById('f-year').value;
+  var sel = document.getElementById('f-month');
+  sel.innerHTML = '<option value="">全部月份</option>';
+  if (!y) return;
+  var months = [...new Set(DATA.filter(function(t){{return t.date.startsWith(y)}}).map(function(t){{return t.date.slice(5,7)}}))].sort();
+  months.forEach(function(m){{ sel.appendChild(new Option(m+'月',m)); }});
+}}
+
+// Filter logic
+var filtersEl = document.getElementById('filters');
+filtersEl.addEventListener('input', debounce(renderAll, 200));
+filtersEl.addEventListener('change', renderAll);
+
+function getFiltered() {{
+  var y = document.getElementById('f-year').value;
+  var m = document.getElementById('f-month').value;
+  var cat = document.getElementById('f-category').value;
+  var q = document.getElementById('f-search').value.toLowerCase();
+  var min = parseFloat(document.getElementById('f-min').value) || null;
+  var max = parseFloat(document.getElementById('f-max').value) || null;
+
+  return DATA.filter(function(t) {{
+    if (y && !t.date.startsWith(y)) return false;
+    if (m && t.date.slice(5,7) !== m) return false;
+    if (cat && t.category !== cat) return false;
+    if (q && !t.merchant.toLowerCase().includes(q)) return false;
+    if (min !== null && Math.abs(t.amount) < min) return false;
+    if (max !== null && Math.abs(t.amount) > max) return false;
+    return true;
+  }});
+}}
+
+// KPI
+function renderKPI(filtered) {{
+  var inc = filtered.filter(function(t){{return t.type==='income'}}).reduce(function(s,t){{return s+t.amount}},0);
+  var exp = filtered.filter(function(t){{return t.type==='expense'}}).reduce(function(s,t){{return s+Math.abs(t.amount)}},0);
+  document.getElementById('kpi').innerHTML =
+    '<div class="kpi-card"><div class="label">总收入</div><div class="value income">€'+inc.toFixed(2)+'</div></div>' +
+    '<div class="kpi-card"><div class="label">总支出</div><div class="value expense">€'+exp.toFixed(2)+'</div></div>' +
+    '<div class="kpi-card"><div class="label">净额</div><div class="value" style="color:'+(inc>=exp?'var(--income)':'var(--expense)')+'">€'+(inc-exp).toFixed(2)+'</div></div>';
+}}
+
+// Category table
+var catSort = {{key:'total', dir:-1}};
+function sortCat(key) {{
+  if (catSort.key === key) catSort.dir *= -1;
+  else {{ catSort.key = key; catSort.dir = -1; }}
+  renderAll();
+}}
+
+function renderCat(filtered) {{
+  var map = {{}};
+  filtered.forEach(function(t) {{
+    var k = t.category;
+    if (!map[k]) map[k] = {{total:0, count:0}};
+    map[k].total += t.type==='expense' ? Math.abs(t.amount) : t.amount;
+    map[k].count++;
+  }});
+  var rows = Object.entries(map);
+  var grand = rows.reduce(function(s,r){{return s+Math.abs(r[1].total)}},0) || 1;
+
+  var key = catSort.key, dir = catSort.dir;
+  rows.sort(function(a,b){{ return (a[1][key] > b[1][key] ? 1 : -1) * dir; }});
+
+  document.getElementById('cat-body').innerHTML = rows.map(function(r){{
+    var pct = (Math.abs(r[1].total)/grand*100).toFixed(1);
+    return '<tr><td>'+r[0]+'</td>' +
+      '<td class="amount '+(r[1].total>=0?'income':'expense')+'">'+(r[1].total>=0?'+':'')+r[1].total.toFixed(2)+'</td>' +
+      '<td class="amount">'+pct+'%<span class="pct-bar" style="width:'+(pct*0.8)+'px;background:'+(r[1].total>=0?'var(--income)':'var(--expense)')+'"></span></td>' +
+      '<td class="amount">'+r[1].count+'</td></tr>';
+  }}).join('');
+}}
+
+// Transaction table
+var txnSort = {{key:'date', dir:-1}};
+var txnPage = 0;
+
+function sortTxn(key) {{
+  if (txnSort.key === key) txnSort.dir *= -1;
+  else {{ txnSort.key = key; txnSort.dir = -1; }}
+  txnPage = 0;
+  renderAll();
+}}
+
+function renderTxn(filtered) {{
+  var sorted = filtered.slice().sort(function(a,b){{
+    var va = a[txnSort.key]||'', vb = b[txnSort.key]||'';
+    return (va > vb ? 1 : -1) * txnSort.dir;
+  }});
+  var totalPages = Math.ceil(sorted.length / PAGE_SIZE) || 1;
+  if (txnPage >= totalPages) txnPage = totalPages - 1;
+  var page = sorted.slice(txnPage * PAGE_SIZE, (txnPage+1) * PAGE_SIZE);
+
+  document.getElementById('txn-info').textContent = '共 '+sorted.length+' 笔';
+  document.getElementById('txn-body').innerHTML = page.map(function(t){{
+    return '<tr><td>'+t.date+'</td><td>'+esc(t.merchant)+'</td><td>'+t.category+'</td>' +
+      '<td class="amount '+(t.type==='income'?'income':'expense')+'">'+(t.amount>=0?'+':'')+t.amount.toFixed(2)+'</td></tr>';
+  }}).join('');
+
+  var pagesHtml = '';
+  for (var i=0; i<totalPages; i++) {{
+    pagesHtml += '<button'+(i===txnPage?' class="active"':'')+' onclick="goPage('+i+')">'+(i+1)+'</button>';
+  }}
+  document.getElementById('txn-pages').innerHTML = pagesHtml;
+}}
+
+function goPage(n) {{ txnPage=n; renderAll(); }}
+
+function resetFilters() {{
+  document.getElementById('f-year').value = '';
+  document.getElementById('f-month').value = '';
+  document.getElementById('f-category').value = '';
+  document.getElementById('f-search').value = '';
+  document.getElementById('f-min').value = '';
+  document.getElementById('f-max').value = '';
+  updateMonthOptions();
+  txnPage = 0;
+  renderAll();
+}}
+
+function renderAll() {{
+  var f = getFiltered();
+  renderKPI(f);
+  renderCat(f);
+  renderTxn(f);
+}}
+
+// Theme
+(function() {{
+  var theme = localStorage.getItem('bankTheme') || 'dark';
+  document.documentElement.setAttribute('data-theme', theme);
+  document.querySelector('.theme-btn').textContent = theme==='dark' ? '☀' : '☾';
+}})();
+function toggleTheme() {{
+  var cur = document.documentElement.getAttribute('data-theme');
+  var next = cur === 'dark' ? 'light' : 'dark';
+  document.documentElement.setAttribute('data-theme', next);
+  localStorage.setItem('bankTheme', next);
+  document.querySelector('.theme-btn').textContent = next==='dark' ? '☀' : '☾';
+}}
+
+function esc(s) {{ return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }}
+function debounce(fn, ms) {{ var t; return function(){{ clearTimeout(t); t=setTimeout(fn,ms); }}; }}
+
+renderAll();
+</script>
+</body>
+</html>'''
 
 
 if __name__ == '__main__':
