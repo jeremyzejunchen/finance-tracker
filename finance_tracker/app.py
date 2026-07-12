@@ -57,14 +57,20 @@ class AppHandler(BaseHTTPRequestHandler):
         try:
             if path == "/api/import/preview":
                 fields, files = parse_multipart(self)
-                upload = files.get("statement")
-                if not upload:
+                uploads = files.get("statements", []) or files.get("statement", [])
+                if not uploads:
                     raise ImportErrorForUser("请选择账单文件。")
-                preview = self.finance.preview(upload["filename"], upload["content"], fields.get("source_path", ""))
-                return self.json_response(preview.summary())
+                return self.json_response(self.finance.preview_many(uploads))
             if path == "/api/import/confirm":
                 body = self.json_body()
-                return self.json_response(self.finance.confirm(body["token"], body.get("source_path", "")))
+                return self.json_response(self.finance.confirm_many(body["items"]))
+            if path == "/api/rebuild":
+                body = self.json_body()
+                if body.get("confirmation") != "重建本地数据":
+                    raise ValueError("请输入“重建本地数据”确认不可逆操作。")
+                self.db.rebuild()
+                self.finance.previews.clear()
+                return self.json_response({"ok": True})
             if path == "/api/transactions/category":
                 body = self.json_body()
                 self.db.set_override(int(body["transaction_id"]), int(body["category_id"]), str(body.get("note", "")))
@@ -120,7 +126,7 @@ class AppHandler(BaseHTTPRequestHandler):
         print(f"{self.address_string()} - {fmt % args}")
 
 
-def parse_multipart(handler: BaseHTTPRequestHandler) -> tuple[dict[str, str], dict[str, dict]]:
+def parse_multipart(handler: BaseHTTPRequestHandler) -> tuple[dict[str, str], dict[str, list[dict]]]:
     content_type = handler.headers.get("Content-Type", "")
     match = re.search(r"boundary=([^;]+)", content_type)
     if not match:
@@ -129,7 +135,7 @@ def parse_multipart(handler: BaseHTTPRequestHandler) -> tuple[dict[str, str], di
     length = int(handler.headers.get("Content-Length", "0"))
     raw = handler.rfile.read(length)
     fields: dict[str, str] = {}
-    files: dict[str, dict] = {}
+    files: dict[str, list[dict]] = {}
     for part in raw.split(b"--" + boundary):
         if b"Content-Disposition" not in part or b"\r\n\r\n" not in part:
             continue
@@ -145,7 +151,7 @@ def parse_multipart(handler: BaseHTTPRequestHandler) -> tuple[dict[str, str], di
         name = name_match.group(1)
         filename_match = re.search(r'filename="([^"]*)"', disposition)
         if filename_match:
-            files[name] = {"filename": Path(filename_match.group(1)).name, "content": body}
+            files.setdefault(name, []).append({"filename": Path(filename_match.group(1)).name, "content": body})
         else:
             fields[name] = body.decode("utf-8", errors="replace")
     return fields, files

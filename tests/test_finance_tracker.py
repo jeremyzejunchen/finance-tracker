@@ -28,6 +28,54 @@ class FinanceTrackerTests(unittest.TestCase):
         self.assertEqual("Example Shop", transactions[0].merchant)
         self.assertEqual("-12.50", str(transactions[0].amount))
 
+    def test_paypal_parser_filters_german_card_funding(self):
+        content = 'Datum,Beschreibung,Währung,Brutto,Name,Transaktionscode\n06.01.2025,PayPal Express-Zahlung,EUR,"-89,00",Shop,T1\n06.01.2025,Allgemeine Gutschrift auf Kreditkarte,EUR,"89,00",,T2\n'.encode()
+        transactions = parse_paypal_csv(content)
+        self.assertEqual(1, len(transactions))
+        self.assertEqual("Shop", transactions[0].merchant)
+
+    def test_batch_preview_keeps_valid_files_and_reports_invalid_files(self):
+        valid = b"Date,Description,Currency,Gross,Name,Transaction ID\n01.06.2026,Payment,EUR,-12.50,Example Shop,TX-1\n"
+        result = self.service.preview_many([
+            {"filename": "paypal.csv", "content": valid},
+            {"filename": "notes.txt", "content": b"not a statement"},
+        ])
+        self.assertEqual(1, len(result["previews"]))
+        self.assertEqual(1, len(result["errors"]))
+        self.assertFalse(result["can_confirm"])
+
+    def test_batch_confirm_imports_each_preview(self):
+        first = b"Date,Description,Currency,Gross,Name,Transaction ID\n01.06.2026,Payment,EUR,-12.50,Shop A,TX-1\n"
+        second = b"Date,Description,Currency,Gross,Name,Transaction ID\n02.06.2026,Payment,EUR,-8.00,Shop B,TX-2\n"
+        previews = self.service.preview_many([{"filename": "a.csv", "content": first}, {"filename": "b.csv", "content": second}])
+        result = self.service.confirm_many([{"token": item["token"]} for item in previews["previews"]])
+        self.assertTrue(all(item["ok"] for item in result["results"]))
+        self.assertEqual(2, len(self.db.transaction_rows()))
+
+    def test_unknown_expense_is_counted_and_marked_for_review(self):
+        content = b"Date,Description,Currency,Gross,Name,Transaction ID\n01.06.2026,Payment,EUR,-12.50,Unknown Shop,TX-1\n"
+        preview = self.service.preview("unknown.csv", content)
+        self.service.confirm(preview.token)
+        row = self.db.transaction_rows()[0]
+        self.assertEqual("其他", row["level3"])
+        self.assertEqual("uncategorized", row["category_reason"])
+        self.assertEqual(1, self.service.report()["count"])
+
+    def test_non_eur_blocks_batch_confirmation(self):
+        content = b"Date,Description,Currency,Gross,Name,Transaction ID\n01.06.2026,Payment,USD,-12.50,Shop,TX-1\n"
+        result = self.service.preview_many([{"filename": "usd.csv", "content": content}])
+        self.assertFalse(result["can_confirm"])
+        with self.assertRaises(ValueError):
+            self.service.confirm_many([{"token": result["previews"][0]["token"]}])
+
+    def test_rebuild_removes_only_derived_database_state(self):
+        content = b"Date,Description,Currency,Gross,Name,Transaction ID\n01.06.2026,Payment,EUR,-12.50,Shop,TX-1\n"
+        preview = self.service.preview("paypal.csv", content)
+        self.service.confirm(preview.token)
+        self.db.rebuild()
+        self.assertEqual([], self.db.transaction_rows())
+        self.assertTrue(self.db.category_rows())
+
     def test_pdf_parser_reads_amount_and_nearby_booking_date(self):
         import fitz
         document = fitz.open()
@@ -45,12 +93,12 @@ class FinanceTrackerTests(unittest.TestCase):
         self.assertEqual(1, result["rejected"])
         self.assertEqual(0, self.service.report()["count"])
 
-    def test_trade_republic_is_investment_and_excluded_from_cashflow(self):
-        content = "Date;Type;Amount;Currency;Instrument;Reference\n2026-06-01;Buy;-10,00;EUR;Sample ETF;TR-1\n".encode()
+    def test_trade_republic_cash_is_imported_and_trading_is_skipped(self):
+        content = "date;category;type;amount;currency;name;transaction_id;description\n2026-06-01;CASH;CARD_TRANSACTION;-10,00;EUR;Sample Shop;TR-1;Card payment\n2026-06-01;TRADING;BUY;-50,00;EUR;Sample ETF;TR-2;Buy\n".encode()
         preview = self.service.preview("trade.csv", content)
         result = self.service.confirm(preview.token)
         self.assertEqual(1, result["inserted"])
-        self.assertEqual(0, self.service.report()["count"])
+        self.assertEqual(1, self.service.report()["count"])
 
     def test_duplicate_source_does_not_write_twice(self):
         content = b"Date,Description,Currency,Gross,Name,Transaction ID\n01.06.2026,Payment,EUR,-12.50,Example Shop,TX-1\n"
