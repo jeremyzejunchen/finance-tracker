@@ -4,6 +4,7 @@
 bank_transactions.json
 bank_summary_2025.html
 failed_transactions_audit.txt
+PayPal分析报告.md
 __pycache__/
 *.pyc
 .claude/
