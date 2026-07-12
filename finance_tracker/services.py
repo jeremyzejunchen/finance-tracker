@@ -4,6 +4,7 @@ import hashlib
 import json
 import uuid
 from collections import defaultdict
+from decimal import Decimal
 from pathlib import Path
 
 from .config import FinanceTrackerConfig, load_config
@@ -22,24 +23,30 @@ class FinanceService:
     def preview(self, filename: str, content: bytes, source_path: str = "") -> ImportPreview:
         source_type, transactions, warnings = parse_file(filename, content, self.config)
         sha256 = hashlib.sha256(content).hexdigest()
+        aggregated_warnings = list(warnings)
+        for item in transactions:
+            aggregated_warnings.extend(item.warnings)
         preview = ImportPreview(
             uuid.uuid4().hex,
             filename,
             source_type,
             sha256,
             transactions,
-            warnings,
+            aggregated_warnings,
             self.db.source_exists(sha256),
         )
         self.previews[preview.token] = preview
         return preview
 
     def preview_many(self, files: list[dict]) -> dict:
-        previews = []
-        errors = []
+        previews: list[dict] = []
+        transactions: list[dict] = []
+        errors: list[dict] = []
         for upload in files:
             try:
-                previews.append(self.preview(upload["filename"], upload["content"]).summary())
+                preview = self.preview(upload["filename"], upload["content"])
+                previews.append(preview.summary())
+                transactions.extend(preview.details())
             except (ValueError, ImportErrorForUser) as error:
                 errors.append({"filename": upload["filename"], "error": str(error)})
         blockers = list(errors)
@@ -47,9 +54,18 @@ class FinanceService:
             if item["total"] == 0:
                 blockers.append({"filename": item["filename"], "error": "未识别到交易"})
             if item["unsupported_currency"]:
-                blockers.append({"filename": item["filename"], "error": "包含不支持的非欧元记录"})
+                blockers.append({"filename": item["filename"], "error": "包含不支持的非 EUR 记录"})
         baseline = self._baseline_difference(previews)
-        return {"previews": previews, "errors": errors, "blockers": blockers, "can_confirm": not blockers, "total_files": len(files), "baseline": baseline}
+        return {
+            "previews": previews,
+            "transactions": transactions,
+            "stats": self._preview_stats(transactions),
+            "errors": errors,
+            "blockers": blockers,
+            "can_confirm": not blockers,
+            "total_files": len(files),
+            "baseline": baseline,
+        }
 
     @staticmethod
     def _baseline_difference(previews: list[dict]) -> dict:
@@ -72,9 +88,29 @@ class FinanceService:
                 "income_cents": {"expected": expected_income, "actual": sum(x["income_cents"] for x in previews)},
                 "expense_cents": {"expected": expected_expense, "actual": sum(x["expense_cents"] for x in previews)},
             }
-            return {"available": True, "different": any(x["expected"] != x["actual"] for x in differences.values()), "differences": differences}
+            return {"available": True, "different": any(item["expected"] != item["actual"] for item in differences.values()), "differences": differences}
         except (OSError, ValueError, TypeError):
             return {"available": False, "different": False}
+
+    @staticmethod
+    def _preview_stats(transactions: list[dict]) -> dict:
+        warning_count = sum(1 for item in transactions if item["warnings"])
+        internal_transfer_count = sum(1 for item in transactions if item["is_internal_transfer"])
+        failed_transaction_count = sum(1 for item in transactions if item["is_failed_transaction"])
+        unsupported_currency_count = sum(1 for item in transactions if item["currency"].upper() != "EUR")
+        unknown_merchant_count = sum(1 for item in transactions if not item["merchant_normalized"] or item["merchant_normalized"].lower().startswith("unknown "))
+        income_cents = sum(int(Decimal(item["amount"]) * 100) for item in transactions if item["currency"].upper() == "EUR" and Decimal(item["amount"]) > 0)
+        expense_cents = sum(int(Decimal(item["amount"]) * 100) for item in transactions if item["currency"].upper() == "EUR" and Decimal(item["amount"]) < 0)
+        return {
+            "total": len(transactions),
+            "warning_count": warning_count,
+            "internal_transfer_count": internal_transfer_count,
+            "failed_transaction_count": failed_transaction_count,
+            "unsupported_currency_count": unsupported_currency_count,
+            "unknown_merchant_count": unknown_merchant_count,
+            "income_cents": income_cents,
+            "expense_cents": expense_cents,
+        }
 
     def confirm_many(self, items: list[dict]) -> dict:
         if not items:
@@ -83,7 +119,7 @@ class FinanceService:
         if any(preview is None for preview in selected):
             raise ValueError("批量导入预览已失效，请重新选择全部文件。")
         if any(any(tx.currency.upper() != "EUR" for tx in preview.transactions) for preview in selected):
-            raise ValueError("批量导入包含非欧元记录，不能统一确认。")
+            raise ValueError("批量导入包含非 EUR 记录，不能统一确认。")
         prepared_imports = []
         for item, preview in zip(items, selected):
             prepared = [self._prepare(tx, preview.source_type) for tx in preview.transactions]
