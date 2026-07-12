@@ -1,21 +1,34 @@
 # Finance Tracker
 
-完全离线的个人账单导入、清洗和收支可视化工具。支持 Deutsche Bank PDF、PayPal CSV 与 Trade Republic CSV；原始账单只读，数据库仅保存提取后的标准化记录和审计信息。
+Offline personal finance import, normalization, and review for Deutsche Bank PDFs, PayPal CSVs, and Trade Republic CSVs.
 
-## 启动
+Phase 1 scope:
+
+- parser parity with the legacy extractor
+- normalization, audit trail, dedup, and reconciliation
+- no legacy consumer auto-classification by default
+
+Out of scope for phase 1:
+
+- classification inbox
+- rule-learning UI
+- data visualization redesign
+
+## Run
 
 ```powershell
 python -m finance_tracker
 ```
 
-默认数据库位于本机 `%LOCALAPPDATA%\FinanceTracker\finance_tracker.sqlite3`，不放在 NAS 或网络共享目录。可通过 `--database D:\FinanceTracker\finance.sqlite3` 指定其他本地磁盘路径。
+The default SQLite path is `%LOCALAPPDATA%\FinanceTracker\finance_tracker.sqlite3`.
 
-浏览器打开 `http://127.0.0.1:8765` 后，可在“导入”页选择账单、预览并确认；导入文件不会被复制或修改。
+Local account ownership and PayPal account mapping must live in `%LOCALAPPDATA%\FinanceTracker\config.json`.
+Use `config.example.json` as the template and keep real IBANs, emails, and names out of the repository.
 
-## 开发验证
+## Tests
 
 ```powershell
 python -m unittest discover -s tests -v
 ```
 
-本项目不使用 CDN、遥测或云端 API。不要提交 PDF、CSV、SQLite 数据库、生成报告或包含个人账单标识的信息。
+Parser parity status is tracked in `docs/phase-1-parser-parity.md`.

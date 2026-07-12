@@ -1,0 +1,26 @@
+Account statement
+Previous balance
++ 100,00
+- 10,00
+Kartenzahlung
+COFFEE SHOP BERLIN
+05-06-
+2026
+06-06-
+2026
+Terminal 123
+- 99,00
+SEPA Überweisung an PAYM.ORDER JOHN DOE
+07-06-
+2026
+07-06-
+2026
+Reference DE00987654329876543210
+- 5,00
+Rückgabe Lastschrift
+FAILED MERCHANT
+08-06-
+2026
+08-06-
+2026
+Chargeback

@@ -1,141 +1,310 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
-from datetime import date
+from decimal import Decimal
 from pathlib import Path
 
+from finance_tracker.config import FinanceTrackerConfig
 from finance_tracker.db import Database
-from finance_tracker.importers import parse_paypal_csv, parse_trade_republic_csv
-from finance_tracker.services import FinanceService
 from finance_tracker.domain import ParsedTransaction
+from finance_tracker.domain import ImportPreview
+from finance_tracker.importers import parse_deutsche_bank_text, parse_paypal_csv, parse_trade_republic_csv
+from finance_tracker.importers.deutsche_bank import FALLBACK_WARNING
+from finance_tracker.services import FinanceService
+
+
+FIXTURES = Path(__file__).parent / "fixtures"
 
 
 class FinanceTrackerTests(unittest.TestCase):
+    maxDiff = None
+
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
         self.db = Database(Path(self.directory.name) / "finance.sqlite3")
         self.db.initialize()
-        self.service = FinanceService(self.db)
+        self.config = FinanceTrackerConfig(
+            own_accounts=[
+                {"name": "Main Checking", "iban": "DE00123456781234567890"},
+                {"name": "Broker Cash", "iban": "DE00987654329876543210"},
+            ],
+            paypal_accounts=[
+                {"account": "ME", "sender_emails": ["me@example.invalid"], "filename_contains": ["-me"]},
+                {"account": "WIFE", "sender_emails": ["wife@example.invalid"], "filename_contains": ["-wife"]},
+            ],
+        )
+        self.service = FinanceService(self.db, self.config)
 
     def tearDown(self):
         self.directory.cleanup()
 
-    def test_paypal_parser_reads_english_export(self):
-        content = b"Date,Description,Currency,Gross,Name,Transaction ID\n01.06.2026,Payment,EUR,-12.50,Example Shop,TX-1\n"
-        transactions = parse_paypal_csv(content)
-        self.assertEqual(1, len(transactions))
-        self.assertEqual("Example Shop", transactions[0].merchant)
-        self.assertEqual("-12.50", str(transactions[0].amount))
+    def _fixture_text(self, name: str) -> str:
+        return (FIXTURES / name).read_text(encoding="utf-8")
 
-    def test_paypal_parser_filters_german_card_funding(self):
-        content = 'Datum,Beschreibung,Währung,Brutto,Name,Transaktionscode\n06.01.2025,PayPal Express-Zahlung,EUR,"-89,00",Shop,T1\n06.01.2025,Allgemeine Gutschrift auf Kreditkarte,EUR,"89,00",,T2\n'.encode()
-        transactions = parse_paypal_csv(content)
-        self.assertEqual(1, len(transactions))
-        self.assertEqual("Shop", transactions[0].merchant)
+    def _fixture_bytes(self, name: str) -> bytes:
+        return (FIXTURES / name).read_bytes()
 
-    def test_batch_preview_keeps_valid_files_and_reports_invalid_files(self):
-        valid = b"Date,Description,Currency,Gross,Name,Transaction ID\n01.06.2026,Payment,EUR,-12.50,Example Shop,TX-1\n"
-        result = self.service.preview_many([
-            {"filename": "paypal.csv", "content": valid},
-            {"filename": "notes.txt", "content": b"not a statement"},
-        ])
-        self.assertEqual(1, len(result["previews"]))
-        self.assertEqual(1, len(result["errors"]))
+    def _import_db_text(self, filename: str, fixture_name: str) -> None:
+        transactions, _warnings = parse_deutsche_bank_text(self._fixture_text(fixture_name))
+        prepared = [self.service._prepare(item, "deutsche_bank_pdf") for item in transactions]
+        self.db.write_import({"path": "", "filename": filename, "source_type": "deutsche_bank_pdf", "sha256": filename}, prepared)
+
+    def _snapshot_from_rows(self, rows):
+        return [
+            {
+                "booking_date": row["booking_date"],
+                "value_date": row["value_date"],
+                "amount": f"{row['amount_cents'] / 100:.2f}",
+                "currency": row["currency"],
+                "merchant_raw": row["merchant_raw"],
+                "merchant_normalized": row["merchant"],
+                "account": row["account"],
+                "external_id": row["external_id"],
+                "transaction_type": row["transaction_type"],
+                "source_format": row["source_format"],
+                "is_internal_transfer": bool(row["is_internal_transfer"]),
+                "is_failed_transaction": bool(row["is_failed_transaction"]),
+                "excluded_reason": row["excluded_reason"],
+            }
+            for row in rows
+        ]
+
+    def _insert_bank_paypal(self, suffix: str, merchant: str = "PayPal Europe", amount: Decimal = Decimal("-12.50")):
+        reference_tx = parse_deutsche_bank_text(self._fixture_text("db_transactions_layout.txt"))[0][0]
+        bank = ParsedTransaction(
+            booking_date=reference_tx.booking_date,
+            value_date=reference_tx.booking_date,
+            amount=amount,
+            currency="EUR",
+            merchant_raw=merchant,
+            merchant_normalized=merchant,
+            description_raw="SEPA direct debit PayPal",
+            account="Deutsche Bank",
+            source_format="db_transactions",
+            source_record_index=0,
+            source_record_key=f"paypal-bank-{suffix}",
+            raw={"kind": "bank_paypal", "suffix": suffix},
+        )
+        self.db.write_import({"path": "", "filename": f"bank-paypal-{suffix}.pdf", "source_type": "deutsche_bank_pdf", "sha256": f"bank-paypal-{suffix}"}, [self.service._prepare(bank, "deutsche_bank_pdf")])
+
+    def test_db_transactions_layout_extracts_payment_details_merchant(self):
+        transactions, warnings = parse_deutsche_bank_text(self._fixture_text("db_transactions_layout.txt"))
+        self.assertFalse(warnings)
+        self.assertEqual(3, len(transactions))
+        self.assertEqual("EXAMPLE MARKET", transactions[0].merchant_normalized)
+        self.assertEqual("SECOND SHOP", transactions[2].merchant_normalized)
+        self.assertEqual("Debit Card Payment", transactions[0].transaction_type)
+
+    def test_db_account_statement_skips_previous_balance_and_reads_split_dates(self):
+        transactions, warnings = parse_deutsche_bank_text(self._fixture_text("db_account_statement_layout.txt"))
+        self.assertFalse(warnings)
+        self.assertEqual(3, len(transactions))
+        self.assertEqual("2026-06-06", transactions[0].booking_date.isoformat())
+        self.assertEqual("-10.00", str(transactions[0].amount))
+        self.assertNotIn("Previous balance", transactions[0].merchant_raw)
+
+    def test_db_statement_marks_internal_and_failed_transactions(self):
+        transactions, _warnings = parse_deutsche_bank_text(self._fixture_text("db_account_statement_layout.txt"))
+        self.assertTrue(transactions[1].is_internal_transfer)
+        self.assertTrue(transactions[2].is_failed_transaction)
+
+    def test_same_day_same_amount_different_merchants_are_both_saved(self):
+        transactions, _warnings = parse_deutsche_bank_text(self._fixture_text("db_transactions_layout.txt"))
+        prepared = [self.service._prepare(item, "deutsche_bank_pdf") for item in transactions]
+        result = self.db.write_import({"path": "", "filename": "statement.pdf", "source_type": "deutsche_bank_pdf", "sha256": "db-1"}, prepared)
+        self.assertEqual(3, result["inserted"])
+        merchants = [row["merchant"] for row in self.db.transaction_rows()]
+        self.assertIn("EXAMPLE MARKET", merchants)
+        self.assertIn("SECOND SHOP", merchants)
+
+    def test_unknown_pdf_fallback_returns_warning_and_preview_summary_includes_it(self):
+        transactions, warnings = parse_deutsche_bank_text("Unknown Merchant\n01.06.2026\n-12,50\n")
+        preview = ImportPreview("fallback-token", "unknown.pdf", "deutsche_bank_pdf", "hash", transactions, warnings)
+        self.assertIn(FALLBACK_WARNING, preview.warnings)
+        self.assertIn(FALLBACK_WARNING, preview.summary()["warnings"])
+
+    def test_paypal_english_and_german_are_both_supported(self):
+        english = parse_paypal_csv(self._fixture_bytes("paypal_en.csv"), "paypal-me.csv", self.config)
+        german = parse_paypal_csv(self._fixture_bytes("paypal_de.csv"), "paypal-wife.csv", self.config)
+        self.assertEqual("ME", english[0].account)
+        self.assertEqual("WIFE", german[0].account)
+        self.assertEqual("Express Checkout Payment", german[0].transaction_type)
+
+    def test_paypal_internal_records_are_filtered(self):
+        transactions = parse_paypal_csv(self._fixture_bytes("paypal_en.csv"), "paypal-me.csv", self.config)
+        external_ids = {item.external_id for item in transactions}
+        self.assertNotIn("PP-2", external_ids)
+
+    def test_paypal_similar_word_real_transactions_are_kept_with_warning(self):
+        english = parse_paypal_csv(self._fixture_bytes("paypal_en.csv"), "paypal-me.csv", self.config)
+        german = parse_paypal_csv(self._fixture_bytes("paypal_de.csv"), "paypal-wife.csv", self.config)
+        suspicious = {item.external_id: item.warnings for item in english + german}
+        self.assertIn("PP-7", suspicious)
+        self.assertTrue(suspicious["PP-7"])
+        self.assertIn("PP-DE-4", suspicious)
+        self.assertTrue(suspicious["PP-DE-4"])
+
+    def test_paypal_internal_type_filter_parameterized(self):
+        cases = [
+            ("Date,Description,Currency,Gross,Name,Transaction ID,From Email Address\n01.06.2026,Bank Deposit to PP Account,EUR,20.00,Top Up,TX-1,me@example.invalid\n", "paypal.csv"),
+            ("Date,Description,Currency,Gross,Name,Transaction ID,From Email Address\n01.06.2026,General Authorization,EUR,-1.00,Hold,TX-2,me@example.invalid\n", "paypal.csv"),
+            ("Datum,Beschreibung,Währung,Brutto,Name,Transaktionscode,Absender E-Mail-Adresse\n01.06.2026,Allgemeine Gutschrift auf Kreditkarte,EUR,\"1,00\",Top Up,TX-3,wife@example.invalid\n", "paypal-de.csv"),
+            ("Datum,Beschreibung,Währung,Brutto,Name,Transaktionscode,Absender E-Mail-Adresse\n01.06.2026,Von Nutzer eingeleitete Abbuchung,EUR,\"-1,00\",Withdraw,TX-4,wife@example.invalid\n", "paypal-de.csv"),
+        ]
+        for content, filename in cases:
+            with self.subTest(filename=filename, content=content):
+                with self.assertRaises(Exception):
+                    parse_paypal_csv(content.encode("utf-8"), filename, self.config)
+
+    def test_trade_republic_extracts_real_merchant_and_internal_transfer(self):
+        transactions = parse_trade_republic_csv(self._fixture_bytes("trade_republic.csv"), self.config)
+        self.assertEqual(3, len(transactions))
+        self.assertEqual("REAL MERCHANT", transactions[0].merchant_normalized)
+        self.assertTrue(transactions[1].is_internal_transfer)
+        self.assertFalse(transactions[2].is_internal_transfer)
+        self.assertEqual("REAL IBAN MERCHANT", transactions[2].merchant_normalized)
+
+    def test_batch_preview_blocks_non_eur_and_collects_baseline_diff(self):
+        content = b"Date,Description,Currency,Gross,Name,Transaction ID,From Email Address\n01.06.2026,Payment,USD,-12.50,Shop,TX-1,me@example.invalid\n"
+        result = self.service.preview_many([{"filename": "paypal.csv", "content": content}])
         self.assertFalse(result["can_confirm"])
+        self.assertEqual(1, len(result["blockers"]))
 
-    def test_batch_confirm_imports_each_preview(self):
-        first = b"Date,Description,Currency,Gross,Name,Transaction ID\n01.06.2026,Payment,EUR,-12.50,Shop A,TX-1\n"
-        second = b"Date,Description,Currency,Gross,Name,Transaction ID\n02.06.2026,Payment,EUR,-8.00,Shop B,TX-2\n"
-        previews = self.service.preview_many([{"filename": "a.csv", "content": first}, {"filename": "b.csv", "content": second}])
-        result = self.service.confirm_many([{"token": item["token"]} for item in previews["previews"]])
-        self.assertTrue(all(item["ok"] for item in result["results"]))
-        self.assertEqual(2, len(self.db.transaction_rows()))
+    def test_paypal_purchase_matches_bank_debit(self):
+        self._insert_bank_paypal("auto", "PayPal Europe")
+        paypal_preview = self.service.preview("paypal-me.csv", self._fixture_bytes("paypal_en.csv"))
+        self.service.confirm(paypal_preview.token)
+        matched = [dict(row) for row in self.db.reconciliation_rows() if row["kind"] == "paypal_bank" and row["status"] == "automatic"]
+        self.assertTrue(matched)
+        bank_rows = [row for row in self.db.transaction_rows() if row["merchant_raw"] == "PayPal Europe"]
+        self.assertEqual("paypal_matched", bank_rows[0]["excluded_reason"])
 
-    def test_unknown_expense_is_counted_and_marked_for_review(self):
-        content = b"Date,Description,Currency,Gross,Name,Transaction ID\n01.06.2026,Payment,EUR,-12.50,Unknown Shop,TX-1\n"
-        preview = self.service.preview("unknown.csv", content)
+    def test_paypal_multiple_bank_candidates_stay_suggested(self):
+        self._insert_bank_paypal("cand-1", "PayPal Europe Candidate 1")
+        self._insert_bank_paypal("cand-2", "PayPal Europe Candidate 2")
+        paypal_preview = self.service.preview("paypal-me.csv", self._fixture_bytes("paypal_en.csv"))
+        self.service.confirm(paypal_preview.token)
+        rows = [dict(row) for row in self.db.reconciliation_rows() if row["kind"] == "paypal_bank"]
+        suggested = [row for row in rows if row["status"] == "suggested"]
+        self.assertTrue(suggested)
+        self.assertLess(suggested[0]["confidence"], 0.9)
+        bank_rows = [row for row in self.db.transaction_rows() if "PayPal Europe" in row["merchant_raw"]]
+        self.assertTrue(all(row["excluded_reason"] != "paypal_matched" for row in bank_rows))
+
+    def test_exact_refund_pair_is_marked_excluded(self):
+        preview = self.service.preview("paypal-me.csv", self._fixture_bytes("paypal_en.csv"))
         self.service.confirm(preview.token)
-        row = self.db.transaction_rows()[0]
-        self.assertEqual("其他", row["level3"])
-        self.assertEqual("uncategorized", row["category_reason"])
-        self.assertEqual(1, self.service.report()["count"])
+        rows = self.db.transaction_rows()
+        refunds = {row["external_id"]: row["excluded_reason"] for row in rows}
+        self.assertEqual("matched_refund_pair", refunds["PP-1"])
+        self.assertEqual("matched_refund_pair", refunds["PP-3"])
 
-    def test_non_eur_blocks_batch_confirmation(self):
-        content = b"Date,Description,Currency,Gross,Name,Transaction ID\n01.06.2026,Payment,USD,-12.50,Shop,TX-1\n"
-        result = self.service.preview_many([{"filename": "usd.csv", "content": content}])
-        self.assertFalse(result["can_confirm"])
-        with self.assertRaises(ValueError):
-            self.service.confirm_many([{"token": result["previews"][0]["token"]}])
-
-    def test_rebuild_removes_only_derived_database_state(self):
-        content = b"Date,Description,Currency,Gross,Name,Transaction ID\n01.06.2026,Payment,EUR,-12.50,Shop,TX-1\n"
-        preview = self.service.preview("paypal.csv", content)
-        self.service.confirm(preview.token)
-        self.db.rebuild()
-        self.assertEqual([], self.db.transaction_rows())
-        self.assertTrue(self.db.category_rows())
-
-    def test_pdf_parser_reads_amount_and_nearby_booking_date(self):
-        import fitz
-        document = fitz.open()
-        page = document.new_page()
-        page.insert_text((72, 72), "Example Merchant\n-12,50\n01.06.2026")
-        from finance_tracker.importers import parse_deutsche_bank_pdf
-        transactions = parse_deutsche_bank_pdf(document.tobytes())
-        self.assertEqual(1, len(transactions))
-        self.assertEqual("-12.50", str(transactions[0].amount))
-
-    def test_non_eur_record_is_stored_but_excluded_from_report(self):
-        content = b"Date,Description,Currency,Gross,Name,Transaction ID\n01.06.2026,Payment,USD,-12.50,Example Shop,TX-1\n"
-        preview = self.service.preview("paypal.csv", content)
-        result = self.service.confirm(preview.token)
-        self.assertEqual(1, result["rejected"])
-        self.assertEqual(0, self.service.report()["count"])
-
-    def test_trade_republic_cash_is_imported_and_trading_is_skipped(self):
-        content = "date;category;type;amount;currency;name;transaction_id;description\n2026-06-01;CASH;CARD_TRANSACTION;-10,00;EUR;Sample Shop;TR-1;Card payment\n2026-06-01;TRADING;BUY;-50,00;EUR;Sample ETF;TR-2;Buy\n".encode()
-        preview = self.service.preview("trade.csv", content)
-        result = self.service.confirm(preview.token)
-        self.assertEqual(1, result["inserted"])
-        self.assertEqual(1, self.service.report()["count"])
-
-    def test_duplicate_source_does_not_write_twice(self):
-        content = b"Date,Description,Currency,Gross,Name,Transaction ID\n01.06.2026,Payment,EUR,-12.50,Example Shop,TX-1\n"
-        first = self.service.preview("paypal.csv", content)
+    def test_cross_batch_refund_matching_creates_automatic_reconciliation(self):
+        debit = b"Date,Description,Currency,Gross,Name,Transaction ID,From Email Address\n01.06.2026,Express Checkout Payment,EUR,-18.00,Cross Batch Shop,CB-1,me@example.invalid\n"
+        credit = b"Date,Description,Currency,Gross,Name,Transaction ID,From Email Address\n03.06.2026,Payment Refund,EUR,18.00,Cross Batch Shop,CB-2,me@example.invalid\n"
+        first = self.service.preview("first.csv", debit)
         self.service.confirm(first.token)
-        second = self.service.preview("paypal.csv", content)
-        self.assertTrue(second.duplicate_source)
-        self.assertTrue(self.service.confirm(second.token)["duplicate_source"])
+        second = self.service.preview("second.csv", credit)
+        self.service.confirm(second.token)
+        recon = [dict(row) for row in self.db.reconciliation_rows() if row["kind"] == "refund_pair"]
+        self.assertTrue(recon)
+        self.assertEqual("automatic", recon[0]["status"])
+        rows = {row["external_id"]: row["excluded_reason"] for row in self.db.transaction_rows()}
+        self.assertEqual("matched_refund_pair", rows["CB-1"])
+        self.assertEqual("matched_refund_pair", rows["CB-2"])
 
-    def test_exact_refund_pair_is_excluded(self):
-        content = b"Date,Description,Currency,Gross,Name,Transaction ID\n01.06.2026,Payment,EUR,-12.50,Example Shop,TX-1\n03.06.2026,Payment Refund,EUR,12.50,Example Shop,TX-2\n"
-        preview = self.service.preview("paypal.csv", content)
-        self.service.confirm(preview.token)
-        self.assertEqual(0, self.service.report()["count"])
+    def test_batch_write_import_is_atomic_across_multiple_files(self):
+        transactions = parse_paypal_csv(self._fixture_bytes("paypal_en.csv"), "paypal-me.csv", self.config)
+        rows_a = [self.service._prepare(transactions[0], "paypal_csv")]
+        rows_b = [self.service._prepare(transactions[1], "paypal_csv"), dict(self.service._prepare(transactions[1], "paypal_csv"))]
+        counts_before = {table: self.db.table_count(table) for table in ("source_files", "transactions", "import_batches", "import_runs")}
+        with self.assertRaises(Exception):
+            self.db.write_import_batch(
+                [
+                    ({"path": "", "filename": "a.csv", "source_type": "paypal_csv", "sha256": "source-a"}, rows_a),
+                    ({"path": "", "filename": "b.csv", "source_type": "paypal_csv", "sha256": "source-b"}, rows_b),
+                ]
+            )
+        counts_after = {table: self.db.table_count(table) for table in ("source_files", "transactions", "import_batches", "import_runs")}
+        self.assertEqual(counts_before, counts_after)
 
-    def test_manual_override_survives_report_reads(self):
-        content = b"Date,Description,Currency,Gross,Name,Transaction ID\n01.06.2026,Payment,EUR,-12.50,Example Shop,TX-1\n"
-        preview = self.service.preview("paypal.csv", content)
+    def test_manual_override_still_works(self):
+        preview = self.service.preview("paypal-me.csv", self._fixture_bytes("paypal_en.csv"))
         self.service.confirm(preview.token)
         transaction = self.db.transaction_rows()[0]
         category = next(item for item in self.db.category_rows() if item["bucket"] == "expense")
-        self.db.set_override(transaction["id"], category["id"], "测试")
+        self.db.set_override(transaction["id"], category["id"], "manual")
         changed = self.db.transaction_rows()[0]
         self.assertEqual("manual_override", changed["category_reason"])
+        self.assertEqual("manual", changed["category_status"])
 
-    def test_paypal_match_excludes_bank_duplicate(self):
-        bank = ParsedTransaction(date(2026, 6, 2), -12.5, "EUR", "PayPal Europe", "SEPA direct debit", account="Deutsche Bank")
-        paypal = ParsedTransaction(date(2026, 6, 1), -12.5, "EUR", "Example Shop", "Payment", account="PayPal", external_id="TX-1")
-        cats = {row["id"]: row for row in self.db.category_rows()}
-        rules = self.db.active_rules()
-        prepared_bank = self.service._prepare(bank, "deutsche_bank_pdf", rules, cats)
-        prepared_paypal = self.service._prepare(paypal, "paypal_csv", rules, cats)
-        self.db.write_import({"path":"","filename":"bank.pdf","source_type":"deutsche_bank_pdf","sha256":"a"}, [prepared_bank])
-        self.db.write_import({"path":"","filename":"paypal.csv","source_type":"paypal_csv","sha256":"b"}, [prepared_paypal])
-        self.assertEqual(1, self.db.reconcile_paypal()["automatic"])
-        bank_row = next(row for row in self.db.transaction_rows() if row["account"] == "Deutsche Bank")
-        self.assertEqual("paypal_matched", bank_row["excluded_reason"])
+    def test_phase_1_defaults_to_unclassified_not_legacy_rules(self):
+        preview = self.service.preview("paypal-me.csv", self._fixture_bytes("paypal_en.csv"))
+        self.service.confirm(preview.token)
+        row = next(row for row in self.db.transaction_rows() if row["external_id"] == "PP-4")
+        self.assertEqual("unclassified", row["category_status"])
+        self.assertEqual("phase_1_default", row["category_reason"])
+
+    def test_expected_snapshot_matches_prepared_rows(self):
+        expected = json.loads(self._fixture_bytes("expected_transactions.json"))
+        db_transactions, _ = parse_deutsche_bank_text(self._fixture_text("db_transactions_layout.txt"))
+        db_statement, _ = parse_deutsche_bank_text(self._fixture_text("db_account_statement_layout.txt"))
+        paypal_en = parse_paypal_csv(self._fixture_bytes("paypal_en.csv"), "paypal-me.csv", self.config)
+        paypal_de = parse_paypal_csv(self._fixture_bytes("paypal_de.csv"), "paypal-wife.csv", self.config)
+        trade_republic = parse_trade_republic_csv(self._fixture_bytes("trade_republic.csv"), self.config)
+
+        self.assertEqual(expected["deutsche_bank_transactions"], self._snapshot_from_parsed(db_transactions))
+        self.assertEqual(expected["deutsche_bank_statement"], self._snapshot_from_parsed(db_statement))
+        self.assertEqual(expected["paypal_english_kept_ids"], [item.external_id for item in paypal_en])
+        self.assertEqual(expected["paypal_german_kept_ids"], [item.external_id for item in paypal_de])
+        self.assertEqual(expected["trade_republic"], self._snapshot_from_parsed(trade_republic))
+
+    def test_reconciliation_snapshot_matches_expected(self):
+        expected = json.loads(self._fixture_bytes("expected_transactions.json"))
+        self._insert_bank_paypal("snap-auto", "PayPal Europe")
+        paypal_preview = self.service.preview("paypal-me.csv", self._fixture_bytes("paypal_en.csv"))
+        self.service.confirm(paypal_preview.token)
+        paypal_auto = [dict(row) for row in self.db.reconciliation_rows() if row["kind"] == "paypal_bank" and row["status"] == "automatic"][0]
+        self.assertEqual(expected["reconciliations"]["paypal_bank_automatic"], self._reconciliation_shape(paypal_auto))
+
+    def test_suggested_reconciliation_snapshot_matches_expected(self):
+        expected = json.loads(self._fixture_bytes("expected_transactions.json"))
+        self._insert_bank_paypal("snap-cand-1", "PayPal Europe Candidate 1")
+        self._insert_bank_paypal("snap-cand-2", "PayPal Europe Candidate 2")
+        paypal_preview = self.service.preview("paypal-me.csv", self._fixture_bytes("paypal_en.csv"))
+        self.service.confirm(paypal_preview.token)
+        paypal_suggested = [dict(row) for row in self.db.reconciliation_rows() if row["kind"] == "paypal_bank" and row["status"] == "suggested"][0]
+        self.assertEqual(expected["reconciliations"]["paypal_bank_suggested"], self._reconciliation_shape(paypal_suggested))
+
+    def _snapshot_from_parsed(self, rows):
+        return [
+            {
+                "booking_date": item.booking_date.isoformat(),
+                "value_date": (item.value_date or item.booking_date).isoformat(),
+                "amount": str(item.amount),
+                "currency": item.currency,
+                "merchant_raw": item.merchant_raw,
+                "merchant_normalized": item.merchant_normalized,
+                "account": item.account,
+                "external_id": item.external_id,
+                "transaction_type": item.transaction_type,
+                "source_format": item.source_format,
+                "is_internal_transfer": item.is_internal_transfer,
+                "is_failed_transaction": item.is_failed_transaction,
+                "excluded_reason": "internal_transfer" if item.is_internal_transfer else "failed_transaction" if item.is_failed_transaction else "",
+            }
+            for item in rows
+        ]
+
+    def _reconciliation_shape(self, row):
+        return {
+            "kind": row["kind"],
+            "reason": row["reason"],
+            "confidence": row["confidence"],
+            "status": row["status"],
+        }
 
 
 if __name__ == "__main__":

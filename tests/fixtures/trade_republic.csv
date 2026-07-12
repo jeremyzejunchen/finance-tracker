@@ -1,0 +1,5 @@
+date;category;type;amount;currency;counterparty_name;counterparty_iban;transaction_id;description
+2026-06-01;CASH;CARD_SUCCESSFUL_TRANSACTION;-10,00;EUR;TR Card Merchant;;TR-1;Card successful transaction REAL MERCHANT
+2026-06-02;CASH;TRANSFER_OUTBOUND;-50,00;EUR;Own Transfer;DE00123456781234567890;TR-2;Transfer to own checking
+2026-06-03;CASH;TRANSFER_DIRECT_DEBIT_INBOUND;-25,00;EUR;Ignored Name;DE00123456781234567890;TR-3;transfer to REAL IBAN MERCHANT (foo)
+2026-06-04;TRADING;BUY;-80,00;EUR;ETF;;TR-4;Buy order

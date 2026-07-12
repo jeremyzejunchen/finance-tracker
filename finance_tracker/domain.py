@@ -11,21 +11,27 @@ class ParsedTransaction:
     booking_date: date
     amount: Decimal
     currency: str
-    merchant: str
-    description: str
+    merchant_raw: str
+    merchant_normalized: str
+    description_raw: str
     account: str = ""
     external_id: str = ""
     transaction_kind: str = "cash"
     value_date: date | None = None
     transaction_type: str = ""
     source_format: str = ""
+    source_record_index: int = 0
+    source_record_key: str = ""
     is_internal_transfer: bool = False
     is_failed_transaction: bool = False
     raw: dict[str, Any] = field(default_factory=dict)
+    warnings: list[str] = field(default_factory=list)
 
     def serializable(self) -> dict[str, Any]:
         data = asdict(self)
         data["booking_date"] = self.booking_date.isoformat()
+        if self.value_date:
+            data["value_date"] = self.value_date.isoformat()
         data["amount"] = str(self.amount)
         return data
 

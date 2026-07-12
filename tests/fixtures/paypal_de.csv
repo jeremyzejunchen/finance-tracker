@@ -1,0 +1,5 @@
+Datum,Beschreibung,Währung,Brutto,Name,Transaktionscode,Absender E-Mail-Adresse
+06.06.2026,PayPal Express-Zahlung,EUR,"-15,00",Beispiel Laden,PP-DE-1,wife@example.invalid
+07.06.2026,Allgemeine Gutschrift auf Kreditkarte,EUR,"15,00",Interne Aufladung,PP-DE-2,wife@example.invalid
+08.06.2026,Von Nutzer eingeleitete Abbuchung,EUR,"-20,00",Interne Auszahlung,PP-DE-3,wife@example.invalid
+09.06.2026,Autorisierung für Partnerzahlung,EUR,"-9,00",Externer Händler,PP-DE-4,wife@example.invalid
