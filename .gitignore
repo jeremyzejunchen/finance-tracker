@@ -10,6 +10,8 @@ __pycache__/
 *.pyc
 .claude/
 .playwright-mcp/
+.venv-phase1/
+.tmp/
 
 # Local application data and operator exports
 data/*.db
