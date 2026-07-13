@@ -46,7 +46,7 @@ class FinanceService:
             try:
                 preview = self.preview(upload["filename"], upload["content"])
                 previews.append(preview.summary())
-                transactions.extend(preview.details())
+                transactions.extend(self._preview_rows(preview))
             except (ValueError, ImportErrorForUser) as error:
                 errors.append({"filename": upload["filename"], "error": str(error)})
         blockers = list(errors)
@@ -96,6 +96,7 @@ class FinanceService:
     def _preview_stats(transactions: list[dict]) -> dict:
         warning_count = sum(1 for item in transactions if item["warnings"])
         internal_transfer_count = sum(1 for item in transactions if item["is_internal_transfer"])
+        currency_exchange_count = sum(1 for item in transactions if item.get("transaction_kind") == "currency_exchange")
         failed_transaction_count = sum(1 for item in transactions if item["is_failed_transaction"])
         unsupported_currency_count = sum(1 for item in transactions if item["currency"].upper() != "EUR")
         unknown_merchant_count = sum(1 for item in transactions if not item["merchant_normalized"] or item["merchant_normalized"].lower().startswith("unknown "))
@@ -105,6 +106,7 @@ class FinanceService:
             "total": len(transactions),
             "warning_count": warning_count,
             "internal_transfer_count": internal_transfer_count,
+            "currency_exchange_count": currency_exchange_count,
             "failed_transaction_count": failed_transaction_count,
             "unsupported_currency_count": unsupported_currency_count,
             "unknown_merchant_count": unknown_merchant_count,
@@ -156,11 +158,18 @@ class FinanceService:
         return result
 
     def _prepare(self, item: ParsedTransaction, source_type: str) -> dict:
+        transaction_kind = item.transaction_kind
+        if transaction_kind in ("", "cash"):
+            transaction_kind = self._currency_exchange_kind(item, source_type) or transaction_kind
         category_id, category_status, category_reason = self._default_category_for(item)
         excluded_reason = ""
-        if item.transaction_kind == "investment":
+        is_internal_transfer = int(item.is_internal_transfer)
+        if transaction_kind == "investment":
             excluded_reason = "investment"
-        if item.is_internal_transfer:
+        if transaction_kind == "currency_exchange":
+            excluded_reason = "currency_exchange"
+            is_internal_transfer = 0
+        elif item.is_internal_transfer:
             excluded_reason = "internal_transfer"
         if item.is_failed_transaction:
             excluded_reason = "failed_transaction"
@@ -174,12 +183,12 @@ class FinanceService:
             "description": item.description_raw,
             "account": item.account,
             "external_id": item.external_id,
-            "transaction_kind": item.transaction_kind,
+            "transaction_kind": transaction_kind or item.transaction_kind,
             "transaction_type": item.transaction_type,
             "source_format": item.source_format or source_type,
             "source_record_index": item.source_record_index,
             "source_record_key": item.source_record_key or f"{source_type}:{item.source_record_index}",
-            "is_internal_transfer": int(item.is_internal_transfer),
+            "is_internal_transfer": is_internal_transfer,
             "is_failed_transaction": int(item.is_failed_transaction),
             "raw": item.raw,
             "category_id": category_id,
@@ -190,6 +199,28 @@ class FinanceService:
         }
         data["fingerprint"] = fingerprint_for_transaction(source_type, data)
         return data
+
+    def _preview_rows(self, preview: ImportPreview) -> list[dict]:
+        rows = preview.details()
+        for row, item in zip(rows, preview.transactions):
+            transaction_kind = item.transaction_kind
+            if transaction_kind in ("", "cash"):
+                transaction_kind = self._currency_exchange_kind(item, preview.source_type) or transaction_kind
+            row["transaction_kind"] = transaction_kind
+            if transaction_kind == "currency_exchange":
+                row["is_internal_transfer"] = False
+        return rows
+
+    def _currency_exchange_kind(self, item: ParsedTransaction, source_type: str) -> str:
+        text = "\n".join(
+            value for value in (
+                item.merchant_raw,
+                item.merchant_normalized,
+                item.description_raw,
+                json.dumps(item.raw, ensure_ascii=False),
+            ) if value
+        )
+        return self.config.currency_exchange_kind_for(source_type, text)
 
     def _default_category_for(self, item: ParsedTransaction) -> tuple[int, str, str]:
         categories = {row["level3"]: row["id"] for row in self.db.category_rows()}

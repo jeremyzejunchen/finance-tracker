@@ -324,7 +324,7 @@ def parse_date_fallback(raw: str):
 
 def is_internal_transfer_f2(type_line: str, merchant_lines: list[str], details_lines: list[str]) -> bool:
     blob = " ".join([type_line] + merchant_lines + details_lines).upper()
-    return "PAYM.ORDER" in blob or "EIGENKONTO" in blob
+    return "EIGENKONTO" in blob
 
 
 def is_failed_transaction_f2(raw_blob: str) -> bool:

@@ -15,6 +15,7 @@ def default_config_path() -> Path:
 class FinanceTrackerConfig:
     own_accounts: list[dict[str, str]] = field(default_factory=list)
     paypal_accounts: list[dict[str, object]] = field(default_factory=list)
+    currency_exchange_rules: list[dict[str, object]] = field(default_factory=list)
 
     @property
     def own_ibans(self) -> set[str]:
@@ -38,6 +39,17 @@ class FinanceTrackerConfig:
                 return account
         return "PayPal"
 
+    def currency_exchange_kind_for(self, source_type: str, text: str) -> str:
+        candidate = text.lower()
+        for rule in self.currency_exchange_rules:
+            source_types = [str(value).strip() for value in rule.get("source_types", []) if str(value).strip()]
+            if source_types and source_type not in source_types:
+                continue
+            contains_all = [str(value).strip().lower() for value in rule.get("contains_all", []) if str(value).strip()]
+            if contains_all and all(token in candidate for token in contains_all):
+                return "currency_exchange"
+        return ""
+
 
 def load_config(path: Path | None = None) -> FinanceTrackerConfig:
     target = path or default_config_path()
@@ -47,4 +59,5 @@ def load_config(path: Path | None = None) -> FinanceTrackerConfig:
     return FinanceTrackerConfig(
         own_accounts=list(raw.get("own_accounts", [])),
         paypal_accounts=list(raw.get("paypal_accounts", [])),
+        currency_exchange_rules=list(raw.get("currency_exchange_rules", [])),
     )
