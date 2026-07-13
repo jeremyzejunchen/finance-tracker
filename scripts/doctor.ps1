@@ -16,19 +16,24 @@ function Assert-Path([string]$Path, [string]$Description) {
     }
 }
 
-$repoRoot = $null
-$current = Get-Location
-while ($true) {
-    if (Test-Path -LiteralPath (Join-Path $current.Path "pyproject.toml")) {
-        $repoRoot = $current.Path
-        break
+function Resolve-RepoRoot {
+    $currentPath = (Get-Location).Path
+
+    while ($true) {
+        if (Test-Path -LiteralPath (Join-Path $currentPath "pyproject.toml")) {
+            return $currentPath
+        }
+
+        $parentPath = Split-Path -Parent $currentPath
+        if (-not $parentPath -or $parentPath -eq $currentPath) {
+            Fail "Could not locate the repository root from $currentPath"
+        }
+
+        $currentPath = $parentPath
     }
-    $parent = Split-Path -Parent $current.Path
-    if (-not $parent -or $parent -eq $current.Path) {
-        Fail "Could not locate the repository root from $($current.Path)"
-    }
-    $current = Get-Item $parent
 }
+
+$repoRoot = Resolve-RepoRoot
 
 Assert-Path (Join-Path $repoRoot "pyproject.toml") "pyproject.toml"
 Assert-Path (Join-Path $repoRoot "finance_tracker") "finance_tracker package"

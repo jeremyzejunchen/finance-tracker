@@ -15,16 +15,16 @@ function Fail([string]$Message) {
 }
 
 function Resolve-RepoRoot {
-    $current = Get-Location
+    $currentPath = (Get-Location).Path
     while ($true) {
-        if (Test-Path -LiteralPath (Join-Path $current.Path "pyproject.toml")) {
-            return $current.Path
+        if (Test-Path -LiteralPath (Join-Path $currentPath "pyproject.toml")) {
+            return $currentPath
         }
-        $parent = Split-Path -Parent $current.Path
-        if (-not $parent -or $parent -eq $current.Path) {
-            Fail "Could not locate the repository root from $($current.Path)"
+        $parentPath = Split-Path -Parent $currentPath
+        if (-not $parentPath -or $parentPath -eq $currentPath) {
+            Fail "Could not locate the repository root from $currentPath"
         }
-        $current = Get-Item $parent
+        $currentPath = $parentPath
     }
 }
 
