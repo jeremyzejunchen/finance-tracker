@@ -13,6 +13,8 @@ def mark_internal_transfers(items: list[dict], config: FinanceTrackerConfig) -> 
     if not own_ibans:
         return
     for item in items:
+        if item.get("transaction_kind") == "currency_exchange":
+            continue
         if item.get("is_internal_transfer"):
             continue
         details = f"{item.get('merchant', '')}\n{item.get('description', '')}\n{item.get('raw', {})}"

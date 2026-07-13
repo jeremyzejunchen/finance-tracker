@@ -84,6 +84,7 @@ class ImportPreview:
                 "description_raw": item.description_raw,
                 "account": item.account,
                 "external_id": item.external_id,
+                "transaction_kind": item.transaction_kind,
                 "transaction_type": item.transaction_type,
                 "source_format": item.source_format,
                 "is_internal_transfer": item.is_internal_transfer,

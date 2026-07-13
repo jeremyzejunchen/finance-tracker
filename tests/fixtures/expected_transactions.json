@@ -73,9 +73,9 @@
       "external_id": "",
       "transaction_type": "SEPA Transfer (out)",
       "source_format": "db_account_statement",
-      "is_internal_transfer": true,
+      "is_internal_transfer": false,
       "is_failed_transaction": false,
-      "excluded_reason": "internal_transfer"
+      "excluded_reason": ""
     },
     {
       "booking_date": "2026-06-08",

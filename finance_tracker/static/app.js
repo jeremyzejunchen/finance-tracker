@@ -14,17 +14,30 @@ const table = (headers, rows) =>
   `<div class="table-wrap"><table><thead><tr>${headers.map(h => `<th>${h}</th>`).join("")}</tr></thead><tbody>${rows.join("")}</tbody></table></div>`;
 
 function escapeHtml(value) {
-  return String(value ?? "").replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;");
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
 }
 
 function statusForPreviewRow(row) {
   if (row.duplicate_source) return "重复来源";
-  if (row.currency.toUpperCase() !== "EUR") return "非 EUR";
+  if ((row.currency || "").toUpperCase() !== "EUR") return "非 EUR";
+  if (row.transaction_kind === "currency_exchange") return "换汇";
   if (row.is_failed_transaction) return "失败交易";
   if (row.is_internal_transfer) return "内部转账";
   if (row.warnings?.length) return "Warning";
   if (!row.merchant_normalized || row.merchant_normalized.toLowerCase().startsWith("unknown ")) return "未识别商户";
   return "正常";
+}
+
+function transactionStatusLabel(row) {
+  if (row.unsupported_currency) return "非 EUR";
+  if (row.excluded_reason === "currency_exchange") return "换汇";
+  if (row.excluded_reason === "internal_transfer") return "内部转账";
+  if (row.excluded_reason === "failed_transaction") return "失败交易";
+  return row.excluded_reason || row.category_status;
 }
 
 function buildPreviewState(data) {
@@ -51,16 +64,17 @@ function filterPreviewTransactions(state) {
   if (state.search) {
     const needle = state.search.toLowerCase();
     rows = rows.filter(row =>
-      row.merchant_raw.toLowerCase().includes(needle) ||
-      row.merchant_normalized.toLowerCase().includes(needle) ||
-      row.description_raw.toLowerCase().includes(needle),
+      (row.merchant_raw || "").toLowerCase().includes(needle) ||
+      (row.merchant_normalized || "").toLowerCase().includes(needle) ||
+      (row.description_raw || "").toLowerCase().includes(needle),
     );
   }
   if (state.status !== "all") rows = rows.filter(row => statusForPreviewRow(row) === state.status);
   if (state.quick === "warnings") rows = rows.filter(row => row.warnings?.length);
   if (state.quick === "internal") rows = rows.filter(row => row.is_internal_transfer);
+  if (state.quick === "exchange") rows = rows.filter(row => row.transaction_kind === "currency_exchange");
   if (state.quick === "failed") rows = rows.filter(row => row.is_failed_transaction);
-  if (state.quick === "non_eur") rows = rows.filter(row => row.currency.toUpperCase() !== "EUR");
+  if (state.quick === "non_eur") rows = rows.filter(row => (row.currency || "").toUpperCase() !== "EUR");
   if (state.quick === "unknown") rows = rows.filter(row => !row.merchant_normalized || row.merchant_normalized.toLowerCase().startsWith("unknown "));
   rows.sort((left, right) => {
     const direction = state.sortDirection === "asc" ? 1 : -1;
@@ -99,7 +113,7 @@ function renderImportPreview(target, state) {
   const accountOptions = [...new Set(state.data.transactions.map(item => item.account))].sort();
   const sourceOptions = [...new Set(state.data.transactions.map(item => item.source_type))].sort();
   const stats = state.data.stats;
-  const normalCount = stats.total - stats.warning_count - stats.internal_transfer_count - stats.failed_transaction_count - stats.unsupported_currency_count;
+  const normalCount = stats.total - stats.warning_count - stats.internal_transfer_count - stats.currency_exchange_count - stats.failed_transaction_count - stats.unsupported_currency_count;
   state.renderedCount = Math.min(rows.length, state.renderedCount || state.chunkSize);
   const canShowMore = state.renderedCount < rows.length;
   const baseline = state.data.baseline?.available
@@ -112,6 +126,7 @@ function renderImportPreview(target, state) {
         <div class="card"><div class="label">正常数量</div><div class="metric">${Math.max(0, normalCount)}</div></div>
         <div class="card"><div class="label">Warning 数量</div><div class="metric">${stats.warning_count}</div></div>
         <div class="card"><div class="label">内部转账</div><div class="metric">${stats.internal_transfer_count}</div></div>
+        <div class="card"><div class="label">换汇</div><div class="metric">${stats.currency_exchange_count}</div></div>
         <div class="card"><div class="label">失败交易</div><div class="metric">${stats.failed_transaction_count}</div></div>
         <div class="card"><div class="label">非 EUR</div><div class="metric">${stats.unsupported_currency_count}</div></div>
       </div>
@@ -132,13 +147,14 @@ function renderImportPreview(target, state) {
         <label>来源文件<select id="preview-file"><option value="">全部</option>${fileOptions.map(item => `<option value="${escapeHtml(item)}"${item === state.sourceFile ? " selected" : ""}>${escapeHtml(item)}</option>`).join("")}</select></label>
         <label>账户<select id="preview-account"><option value="">全部</option>${accountOptions.map(item => `<option value="${escapeHtml(item)}"${item === state.account ? " selected" : ""}>${escapeHtml(item)}</option>`).join("")}</select></label>
         <label>source_type<select id="preview-source-type"><option value="">全部</option>${sourceOptions.map(item => `<option value="${escapeHtml(item)}"${item === state.sourceType ? " selected" : ""}>${escapeHtml(item)}</option>`).join("")}</select></label>
-        <label>状态<select id="preview-status"><option value="all">全部</option>${["正常", "Warning", "内部转账", "失败交易", "非 EUR", "重复来源", "未识别商户"].map(item => `<option value="${item}"${item === state.status ? " selected" : ""}>${item}</option>`).join("")}</select></label>
+        <label>状态<select id="preview-status"><option value="all">全部</option>${["正常", "Warning", "内部转账", "换汇", "失败交易", "非 EUR", "重复来源", "未识别商户"].map(item => `<option value="${item}"${item === state.status ? " selected" : ""}>${item}</option>`).join("")}</select></label>
         <label>排序<select id="preview-sort"><option value="booking_date:desc"${state.sortKey === "booking_date" && state.sortDirection === "desc" ? " selected" : ""}>日期 ↓</option><option value="booking_date:asc"${state.sortKey === "booking_date" && state.sortDirection === "asc" ? " selected" : ""}>日期 ↑</option><option value="amount:desc"${state.sortKey === "amount" && state.sortDirection === "desc" ? " selected" : ""}>金额 ↓</option><option value="amount:asc"${state.sortKey === "amount" && state.sortDirection === "asc" ? " selected" : ""}>金额 ↑</option></select></label>
       </div>
       <div class="form-row">
         <button type="button" class="${state.quick === "all" ? "" : "secondary"}" data-quick="all">全部</button>
         <button type="button" class="${state.quick === "warnings" ? "" : "secondary"}" data-quick="warnings">仅 Warning</button>
         <button type="button" class="${state.quick === "internal" ? "" : "secondary"}" data-quick="internal">内部转账</button>
+        <button type="button" class="${state.quick === "exchange" ? "" : "secondary"}" data-quick="exchange">换汇</button>
         <button type="button" class="${state.quick === "failed" ? "" : "secondary"}" data-quick="failed">失败交易</button>
         <button type="button" class="${state.quick === "non_eur" ? "" : "secondary"}" data-quick="non_eur">非 EUR</button>
         <button type="button" class="${state.quick === "unknown" ? "" : "secondary"}" data-quick="unknown">未识别商户</button>
@@ -150,7 +166,7 @@ function renderImportPreview(target, state) {
     <section class="panel">
       <label><input id="confirm-check" type="checkbox"> 我已经检查本次导入数据</label>
       <div class="form-row">
-        <button id="confirm" ${state.data.can_confirm ? "disabled" : "disabled"}>统一确认导入</button>
+        <button id="confirm" disabled>统一确认导入</button>
       </div>
       ${state.data.can_confirm ? "" : '<p class="warning">存在解析失败、非 EUR 阻断条件或零交易文件，暂不能确认导入。</p>'}
     </section>
@@ -300,7 +316,7 @@ async function transactions(review = false) {
   app.innerHTML = `<section class="panel">
     <p class="label">${review ? "待复核包含未分类、排除统计、非 EUR 和自动对账建议。" : "人工修改分类会保留审计记录，重新导入不会覆盖。"}</p>
     <label>搜索商户或说明<input id="tx-search" placeholder="输入关键词"></label>
-    <div id="tx-table">${table(["日期", "商户", "金额", "来源", "分类", "状态"], filtered.map(row => `<tr data-search="${escapeHtml((row.merchant + " " + row.description).toLowerCase())}"><td>${row.booking_date}</td><td title="${escapeHtml(row.description)}">${escapeHtml(row.merchant)}</td><td class="${row.amount_cents >= 0 ? "amount-positive" : "amount-negative"}">${money(row.amount_cents)}</td><td>${escapeHtml(row.filename)}</td><td><select data-id="${row.id}">${options}</select></td><td>${row.unsupported_currency ? "非 EUR" : escapeHtml(row.excluded_reason || row.category_status)}</td></tr>`))}</div>
+    <div id="tx-table">${table(["日期", "商户", "金额", "来源", "分类", "状态"], filtered.map(row => `<tr data-search="${escapeHtml((row.merchant + " " + row.description).toLowerCase())}"><td>${row.booking_date}</td><td title="${escapeHtml(row.description)}">${escapeHtml(row.merchant)}</td><td class="${row.amount_cents >= 0 ? "amount-positive" : "amount-negative"}">${money(row.amount_cents)}</td><td>${escapeHtml(row.filename)}</td><td><select data-id="${row.id}">${options}</select></td><td>${escapeHtml(transactionStatusLabel(row))}</td></tr>`))}</div>
   </section>`;
   filtered.forEach(row => {
     const select = document.querySelector(`select[data-id="${row.id}"]`);

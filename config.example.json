@@ -20,5 +20,12 @@
       "sender_emails": ["wife@example.invalid"],
       "filename_contains": ["-wife", "-shared"]
     }
+  ],
+  "currency_exchange_rules": [
+    {
+      "name": "Example FX remittance",
+      "source_types": ["deutsche_bank_pdf"],
+      "contains_all": ["STRUCTURAL_MARKER_A", "STRUCTURAL_MARKER_B"]
+    }
   ]
 }

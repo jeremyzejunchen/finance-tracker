@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
@@ -34,6 +35,13 @@ class FinanceTrackerTests(unittest.TestCase):
                 {"account": "ME", "sender_emails": ["me@example.invalid"], "filename_contains": ["-me"]},
                 {"account": "WIFE", "sender_emails": ["wife@example.invalid"], "filename_contains": ["-wife"]},
             ],
+            currency_exchange_rules=[
+                {
+                    "name": "Example FX remittance",
+                    "source_types": ["deutsche_bank_pdf"],
+                    "contains_all": ["fx marker a", "fx marker b"],
+                }
+            ],
         )
         self.service = FinanceService(self.db, self.config)
 
@@ -50,6 +58,25 @@ class FinanceTrackerTests(unittest.TestCase):
         transactions, _warnings = parse_deutsche_bank_text(self._fixture_text(fixture_name))
         prepared = [self.service._prepare(item, "deutsche_bank_pdf") for item in transactions]
         self.db.write_import({"path": "", "filename": filename, "source_type": "deutsche_bank_pdf", "sha256": filename}, prepared)
+
+    def _db_statement_transaction(self, **overrides) -> ParsedTransaction:
+        values = {
+            "booking_date": overrides.pop("booking_date", date(2026, 6, 7)),
+            "value_date": overrides.pop("value_date", date(2026, 6, 7)),
+            "amount": overrides.pop("amount", Decimal("2500.00")),
+            "currency": overrides.pop("currency", "EUR"),
+            "merchant_raw": overrides.pop("merchant_raw", "PAYM.ORDER SAMPLE REMITTER"),
+            "merchant_normalized": overrides.pop("merchant_normalized", "PAYM.ORDER SAMPLE REMITTER"),
+            "description_raw": overrides.pop("description_raw", "REFERENCE FX MARKER A / FX MARKER B"),
+            "account": overrides.pop("account", "Deutsche Bank"),
+            "transaction_type": overrides.pop("transaction_type", "SEPA Transfer (in)"),
+            "source_format": overrides.pop("source_format", "db_account_statement"),
+            "source_record_index": overrides.pop("source_record_index", 0),
+            "source_record_key": overrides.pop("source_record_key", "db_account_statement:fx"),
+            "raw": overrides.pop("raw", {"layout": "db_account_statement", "type_line": "SEPA Überweisung von PAYM.ORDER SAMPLE REMITTER", "details_lines": ["REFERENCE FX MARKER A", "FX MARKER B"]}),
+        }
+        values.update(overrides)
+        return ParsedTransaction(**values)
 
     def _snapshot_from_rows(self, rows):
         return [
@@ -107,8 +134,54 @@ class FinanceTrackerTests(unittest.TestCase):
 
     def test_db_statement_marks_internal_and_failed_transactions(self):
         transactions, _warnings = parse_deutsche_bank_text(self._fixture_text("db_account_statement_layout.txt"))
-        self.assertTrue(transactions[1].is_internal_transfer)
+        self.assertFalse(transactions[1].is_internal_transfer)
         self.assertTrue(transactions[2].is_failed_transaction)
+
+    def test_paym_order_credit_is_not_auto_internal_transfer(self):
+        transaction = self._db_statement_transaction()
+        prepared = self.service._prepare(transaction, "deutsche_bank_pdf")
+        self.assertEqual("currency_exchange", prepared["transaction_kind"])
+        self.assertEqual(0, prepared["is_internal_transfer"])
+
+    def test_eigenkonto_still_marks_internal_transfer(self):
+        transactions, _warnings = parse_deutsche_bank_text(
+            "Account statement\n"
+            "- 20,00\n"
+            "SEPA Überweisung an EIGENKONTO\n"
+            "OWN ACCOUNT\n"
+            "07-06-\n"
+            "2026\n"
+            "07-06-\n"
+            "2026\n"
+            "Reference DE00987654329876543210\n"
+        )
+        self.assertEqual(1, len(transactions))
+        self.assertTrue(transactions[0].is_internal_transfer)
+
+    def test_currency_exchange_rule_marks_paym_order_credit(self):
+        transaction = self._db_statement_transaction()
+        prepared = self.service._prepare(transaction, "deutsche_bank_pdf")
+        self.assertEqual("currency_exchange", prepared["transaction_kind"])
+        self.assertEqual("currency_exchange", prepared["excluded_reason"])
+
+    def test_currency_exchange_is_not_internal_transfer(self):
+        transaction = self._db_statement_transaction()
+        prepared = self.service._prepare(transaction, "deutsche_bank_pdf")
+        self.assertEqual(0, prepared["is_internal_transfer"])
+
+    def test_configured_own_iban_transfer_still_marks_internal_transfer(self):
+        transaction = self._db_statement_transaction(
+            description_raw="Transfer to own broker DE00987654329876543210",
+            raw={"layout": "db_account_statement", "details_lines": ["DE00987654329876543210"]},
+            source_record_key="db_account_statement:own-transfer",
+        )
+        prepared = self.service._prepare(transaction, "deutsche_bank_pdf")
+        self.assertEqual("", prepared["excluded_reason"])
+        from finance_tracker.reconciliation.transfers import mark_internal_transfers
+
+        mark_internal_transfers([prepared], self.config)
+        self.assertEqual(1, prepared["is_internal_transfer"])
+        self.assertEqual("internal_transfer", prepared["excluded_reason"])
 
     def test_same_day_same_amount_different_merchants_are_both_saved(self):
         transactions, _warnings = parse_deutsche_bank_text(self._fixture_text("db_transactions_layout.txt"))
@@ -205,6 +278,42 @@ class FinanceTrackerTests(unittest.TestCase):
         self.assertGreaterEqual(result["stats"]["warning_count"], 2)
         self.assertEqual(1, result["stats"]["internal_transfer_count"])
         self.assertEqual(0, result["stats"]["failed_transaction_count"])
+
+    def test_preview_stats_include_currency_exchange_count(self):
+        preview = ImportPreview(
+            "preview-fx",
+            "fx.pdf",
+            "deutsche_bank_pdf",
+            "hash-fx",
+            [self._db_statement_transaction()],
+            [],
+        )
+        original_preview = self.service.preview
+        self.service.preview = lambda filename, content, source_path="": preview
+        try:
+            result = self.service.preview_many([{"filename": "fx.pdf", "content": b"synthetic"}])
+        finally:
+            self.service.preview = original_preview
+        self.assertEqual(1, result["stats"]["total"])
+        self.assertEqual(1, result["stats"]["currency_exchange_count"])
+
+    def test_complete_preview_marks_currency_exchange_transaction(self):
+        preview = ImportPreview(
+            "preview-fx",
+            "fx.pdf",
+            "deutsche_bank_pdf",
+            "hash-fx",
+            [self._db_statement_transaction()],
+            [],
+        )
+        original_preview = self.service.preview
+        self.service.preview = lambda filename, content, source_path="": preview
+        try:
+            result = self.service.preview_many([{"filename": "fx.pdf", "content": b"synthetic"}])
+        finally:
+            self.service.preview = original_preview
+        self.assertEqual("currency_exchange", result["transactions"][0]["transaction_kind"])
+        self.assertFalse(result["transactions"][0]["is_internal_transfer"])
 
     def test_transaction_warnings_appear_in_complete_preview_response(self):
         result = self.service.preview_many([
@@ -336,6 +445,27 @@ class FinanceTrackerTests(unittest.TestCase):
         row = next(row for row in self.db.transaction_rows() if row["external_id"] == "PP-4")
         self.assertEqual("unclassified", row["category_status"])
         self.assertEqual("phase_1_default", row["category_reason"])
+
+    def test_currency_exchange_is_written_with_excluded_reason(self):
+        transaction = self._db_statement_transaction()
+        self.db.write_import(
+            {"path": "", "filename": "fx.pdf", "source_type": "deutsche_bank_pdf", "sha256": "fx-1"},
+            [self.service._prepare(transaction, "deutsche_bank_pdf")],
+        )
+        row = self.db.transaction_rows()[0]
+        self.assertEqual("currency_exchange", row["excluded_reason"])
+        self.assertEqual("currency_exchange", row["transaction_kind"])
+        self.assertEqual(0, row["is_internal_transfer"])
+
+    def test_currency_exchange_is_excluded_from_report_income_and_net(self):
+        self.db.write_import(
+            {"path": "", "filename": "fx.pdf", "source_type": "deutsche_bank_pdf", "sha256": "fx-1"},
+            [self.service._prepare(self._db_statement_transaction(), "deutsche_bank_pdf")],
+        )
+        report = self.service.report()
+        self.assertEqual(0, report["income"])
+        self.assertEqual(0, report["net"])
+        self.assertEqual(0, report["count"])
 
     def test_expected_snapshot_matches_prepared_rows(self):
         expected = json.loads(self._fixture_bytes("expected_transactions.json"))
