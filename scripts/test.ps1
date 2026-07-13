@@ -1,5 +1,10 @@
 $ErrorActionPreference = "Stop"
 
+if ($PSVersionTable.PSVersion.Major -lt 7) {
+    Write-Error "PowerShell 7 or newer is required. Run this script with pwsh."
+    exit 1
+}
+
 function Fail([string]$Message) {
     Write-Error $Message
     exit 1

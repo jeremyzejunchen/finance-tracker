@@ -1,5 +1,10 @@
 $ErrorActionPreference = "Stop"
 
+if ($PSVersionTable.PSVersion.Major -lt 7) {
+    Write-Error "PowerShell 7 or newer is required. Run this script with pwsh."
+    exit 1
+}
+
 function Fail([string]$Message) {
     Write-Error $Message
     exit 1
@@ -11,7 +16,20 @@ function Assert-Path([string]$Path, [string]$Description) {
     }
 }
 
-$repoRoot = (Get-Location).Path
+$repoRoot = $null
+$current = Get-Location
+while ($true) {
+    if (Test-Path -LiteralPath (Join-Path $current.Path "pyproject.toml")) {
+        $repoRoot = $current.Path
+        break
+    }
+    $parent = Split-Path -Parent $current.Path
+    if (-not $parent -or $parent -eq $current.Path) {
+        Fail "Could not locate the repository root from $($current.Path)"
+    }
+    $current = Get-Item $parent
+}
+
 Assert-Path (Join-Path $repoRoot "pyproject.toml") "pyproject.toml"
 Assert-Path (Join-Path $repoRoot "finance_tracker") "finance_tracker package"
 Assert-Path (Join-Path $repoRoot "tests") "tests directory"
