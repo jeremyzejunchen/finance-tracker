@@ -45,6 +45,7 @@ class ImportPreview:
     transactions: list[ParsedTransaction]
     warnings: list[str]
     duplicate_source: bool = False
+    parser_warnings: list[str] = field(default_factory=list)
 
     def summary(self) -> dict[str, Any]:
         supported = sum(item.currency.upper() == "EUR" for item in self.transactions)

@@ -243,7 +243,118 @@ class FinanceTrackerTests(unittest.TestCase):
         content = b"Date,Description,Currency,Gross,Name,Transaction ID,From Email Address\n01.06.2026,Payment,USD,-12.50,Shop,TX-1,me@example.invalid\n"
         result = self.service.preview_many([{"filename": "paypal.csv", "content": content}])
         self.assertFalse(result["can_confirm"])
+        self.assertEqual(result["can_confirm"], result["audit"]["can_confirm"])
         self.assertEqual(1, len(result["blockers"]))
+        self.assertEqual("blocked", result["audit"]["status"])
+        self.assertFalse(result["audit"]["can_confirm"])
+        self.assertEqual("UNSUPPORTED_CURRENCY", result["audit"]["findings"][0]["code"])
+
+    def test_clean_eur_batch_has_passing_audit_and_exact_totals(self):
+        content = (
+            "Date,Category,Amount,Currency,Description\n"
+            "01.06.2026,CASH,12.10,EUR,Salary\n"
+            "02.06.2026,CASH,-2.05,EUR,Coffee\n"
+        ).encode("utf-8")
+        result = self.service.preview_many([
+            {"filename": "clean.csv", "content": content},
+        ])
+        audit = result["audit"]
+        self.assertEqual("pass", audit["status"])
+        self.assertTrue(audit["can_confirm"])
+        self.assertEqual(result["can_confirm"], audit["can_confirm"])
+        self.assertEqual(2, audit["parsed_transaction_count"])
+        self.assertEqual("10.05", audit["totals_by_currency"]["EUR"])
+
+    def test_parser_warnings_are_warning_findings(self):
+        preview = ImportPreview(
+            "warning-preview", "unknown.pdf", "deutsche_bank_pdf", "warning-hash",
+            [self._db_statement_transaction()],
+            ["synthetic parser warning"],
+            parser_warnings=["synthetic parser warning"],
+        )
+        original_preview = self.service.preview
+        self.service.preview = lambda filename, content, source_path="": preview
+        try:
+            result = self.service.preview_many([{"filename": "unknown.pdf", "content": b"synthetic"}])
+        finally:
+            self.service.preview = original_preview
+        audit = result["audit"]
+        self.assertEqual("warning", audit["status"])
+        self.assertTrue(audit["can_confirm"])
+        self.assertEqual(result["can_confirm"], audit["can_confirm"])
+        self.assertTrue(any(item["code"] == "PARSER_WARNING" for item in audit["findings"]))
+        self.assertEqual(1, len(audit["findings"]))
+
+    def test_transaction_warnings_are_distinct_findings_and_count_transactions_once(self):
+        preview = ImportPreview(
+            "transaction-warning-preview", "warning.pdf", "deutsche_bank_pdf", "warning-hash",
+            [self._db_statement_transaction(warnings=["first", "second", "first"])],
+            ["first", "second", "first"],
+        )
+        original_preview = self.service.preview
+        self.service.preview = lambda filename, content, source_path="": preview
+        try:
+            result = self.service.preview_many([{"filename": "warning.pdf", "content": b"synthetic"}])
+        finally:
+            self.service.preview = original_preview
+        findings = result["audit"]["findings"]
+        self.assertEqual(["TRANSACTION_WARNING", "TRANSACTION_WARNING"], [item["code"] for item in findings])
+        self.assertEqual(1, result["audit"]["warning_transaction_count"])
+        self.assertEqual(2, result["audit"]["warning_finding_count"])
+
+    def test_excluded_transactions_are_counted_by_reason(self):
+        result = self.service.preview_many([
+            {"filename": "trade.csv", "content": self._fixture_bytes("trade_republic.csv")},
+        ])
+        audit = result["audit"]
+        self.assertEqual(1, audit["excluded_transaction_count"])
+        self.assertEqual(1, audit["excluded_by_reason"]["internal_transfer"])
+        self.assertTrue(audit["can_confirm"])
+
+    def test_audit_counts_multiple_files_and_blocker_precedes_warning(self):
+        unsupported = b"Date,Description,Currency,Gross,Name,Transaction ID,From Email Address\n01.06.2026,Payment,USD,-1.00,Shop,TX-1,me@example.invalid\n"
+        result = self.service.preview_many([
+            {"filename": "warning.csv", "content": self._fixture_bytes("paypal_en.csv")},
+            {"filename": "unsupported.csv", "content": unsupported},
+        ])
+        self.assertEqual(2, result["audit"]["source_file_count"])
+        self.assertEqual("blocked", result["audit"]["status"])
+        self.assertFalse(result["audit"]["can_confirm"])
+
+    def test_audit_indexes_are_unique_across_files_and_json_serializable(self):
+        result = self.service.preview_many([
+            {"filename": "first.csv", "content": self._fixture_bytes("paypal_en.csv")},
+            {"filename": "second.csv", "content": self._fixture_bytes("trade_republic.csv")},
+        ])
+        indexes = [index for finding in result["audit"]["findings"] for index in finding["transaction_indexes"]]
+        self.assertEqual(len(indexes), len(set(indexes)))
+        self.assertEqual(len(result["transactions"]), result["audit"]["parsed_transaction_count"])
+        for finding in result["audit"]["findings"]:
+            if finding["code"] == "TRANSACTION_WARNING":
+                self.assertIn(finding["message"], result["transactions"][finding["transaction_indexes"][0]]["warnings"])
+        json.dumps(result["audit"])
+
+    def test_audit_preserves_preview_fields_and_can_confirm_agreement(self):
+        result = self.service.preview_many([
+            {"filename": "paypal-me.csv", "content": self._fixture_bytes("paypal_en.csv")},
+        ])
+        for field in ("previews", "transactions", "stats", "errors", "blockers", "can_confirm", "total_files", "baseline"):
+            self.assertIn(field, result)
+        self.assertEqual(result["can_confirm"], result["audit"]["can_confirm"])
+
+    def test_mixed_currency_totals_are_separate_and_canonical(self):
+        eur = b"Date,Category,Amount,Currency,Description\n01.06.2026,CASH,1.2,EUR,EUR\n"
+        usd = b"Date,Description,Currency,Gross,Name,Transaction ID,From Email Address\n01.06.2026,Payment,USD,-1.20,Shop,TX-1,me@example.invalid\n"
+        audit = self.service.preview_many([
+            {"filename": "eur.csv", "content": eur},
+            {"filename": "usd.csv", "content": usd},
+        ])["audit"]
+        self.assertEqual({"EUR": "1.20", "USD": "-1.20"}, audit["totals_by_currency"])
+
+    def test_canonical_zero_money_format(self):
+        content = b"Date,Category,Amount,Currency,Description\n01.06.2026,CASH,0,EUR,Zero\n"
+        audit = self.service.preview_many([{"filename": "zero.csv", "content": content}])["audit"]
+        self.assertEqual("0.00", audit["totals_by_currency"]["EUR"])
 
     def test_preview_many_returns_full_transactions_not_only_sample(self):
         header = "Date,Description,Currency,Gross,Name,Transaction ID,From Email Address\n"

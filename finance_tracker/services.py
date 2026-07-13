@@ -8,6 +8,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from .config import FinanceTrackerConfig, load_config
+from .audit import AuditTransaction, build_audit
 from .db import Database
 from .domain import ImportPreview, ParsedTransaction
 from .importers import ImportErrorForUser, parse_file
@@ -34,37 +35,55 @@ class FinanceService:
             transactions,
             aggregated_warnings,
             self.db.source_exists(sha256),
+            parser_warnings=list(warnings),
         )
         self.previews[preview.token] = preview
         return preview
 
     def preview_many(self, files: list[dict]) -> dict:
         previews: list[dict] = []
+        preview_objects: list[ImportPreview] = []
         transactions: list[dict] = []
         errors: list[dict] = []
         for upload in files:
             try:
                 preview = self.preview(upload["filename"], upload["content"])
+                preview_objects.append(preview)
                 previews.append(preview.summary())
                 transactions.extend(self._preview_rows(preview))
             except (ValueError, ImportErrorForUser) as error:
                 errors.append({"filename": upload["filename"], "error": str(error)})
         blockers = list(errors)
+        empty_files: list[str] = []
         for item in previews:
             if item["total"] == 0:
                 blockers.append({"filename": item["filename"], "error": "未识别到交易"})
+                empty_files.append(item["filename"])
             if item["unsupported_currency"]:
                 blockers.append({"filename": item["filename"], "error": "包含不支持的非 EUR 记录"})
         baseline = self._baseline_difference(previews)
+        audit_transactions = []
+        global_index = 0
+        for preview in preview_objects:
+            for transaction in preview.transactions:
+                prepared = self._prepare(transaction, preview.source_type)
+                audit_transactions.append(AuditTransaction(
+                    global_index, transaction.currency, transaction.amount,
+                    list(transaction.warnings), prepared["excluded_reason"],
+                ))
+                global_index += 1
+        parser_warnings = [warning for preview in preview_objects for warning in preview.parser_warnings]
+        audit = build_audit(len(files), audit_transactions, errors, empty_files, parser_warnings)
         return {
             "previews": previews,
             "transactions": transactions,
             "stats": self._preview_stats(transactions),
             "errors": errors,
             "blockers": blockers,
-            "can_confirm": not blockers,
+            "can_confirm": audit["can_confirm"],
             "total_files": len(files),
             "baseline": baseline,
+            "audit": audit,
         }
 
     @staticmethod
