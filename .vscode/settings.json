@@ -1,0 +1,11 @@
+{
+  "files.encoding": "utf8",
+  "python.defaultInterpreterPath": "${workspaceFolder}\\.venv-phase1\\Scripts\\python.exe",
+  "python.terminal.activateEnvironment": false,
+  "terminal.integrated.profiles.windows": {
+    "PowerShell 7": {
+      "source": "PowerShell"
+    }
+  },
+  "terminal.integrated.defaultProfile.windows": "PowerShell 7"
+}

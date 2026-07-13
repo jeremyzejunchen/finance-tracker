@@ -8,8 +8,11 @@ failed_transactions_audit.txt
 PayPal分析报告.md
 __pycache__/
 *.pyc
+*.egg-info/
 .claude/
 .playwright-mcp/
+.venv-phase1/
+.tmp/
 
 # Local application data and operator exports
 data/*.db

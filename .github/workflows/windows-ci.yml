@@ -1,0 +1,69 @@
+name: Windows CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Windows / Python ${{ matrix.python-version }}
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version:
+          - "3.11"
+          - "3.14"
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Display environment
+        shell: pwsh
+        run: |
+          $PSVersionTable.PSVersion
+          python --version
+          (Get-Command python.exe).Source
+
+      - name: Run bootstrap
+        shell: pwsh
+        run: |
+          $pythonPath = (Get-Command python.exe).Source
+          pwsh -NoProfile -File .\scripts\bootstrap.ps1 -PythonPath $pythonPath
+
+      - name: Run doctor
+        shell: pwsh
+        run: pwsh -NoProfile -File .\scripts\doctor.ps1
+
+      - name: Verify root discovery from tests
+        shell: pwsh
+        run: |
+          Push-Location .\tests
+          pwsh -NoProfile -File ..\scripts\doctor.ps1
+          Pop-Location
+
+      - name: Run tests
+        shell: pwsh
+        run: pwsh -NoProfile -File .\scripts\test.ps1
+
+      - name: Verify repository cleanliness
+        shell: pwsh
+        run: |
+          git diff --check
+
+          $changes = git status --porcelain
+          if ($changes) {
+            git status --short
+            throw "The CI workflow left tracked repository changes."
+          }
