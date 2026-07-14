@@ -13,7 +13,7 @@ from finance_tracker.db import Database
 from finance_tracker.domain import ParsedTransaction
 from finance_tracker.domain import ImportPreview
 from finance_tracker.importers import parse_deutsche_bank_text, parse_paypal_csv, parse_trade_republic_csv
-from finance_tracker.importers.deutsche_bank import FALLBACK_WARNING
+from finance_tracker.importers.deutsche_bank import FALLBACK_WARNING, MERCHANT_WARNING, UNKNOWN_MERCHANT
 from finance_tracker.reconciliation.paypal import reconcile_paypal_rows
 from finance_tracker.services import FinanceService
 
@@ -154,6 +154,85 @@ class FinanceTrackerTests(unittest.TestCase):
         transactions, _warnings = parse_deutsche_bank_text(self._fixture_text("db_account_statement_layout.txt"))
         self.assertFalse(transactions[1].is_internal_transfer)
         self.assertTrue(transactions[2].is_failed_transaction)
+
+    def test_db_account_statement_extracts_retailers_and_warns_for_placeholder(self):
+        transactions, warnings = parse_deutsche_bank_text(self._fixture_text("db_account_statement_merchants.txt"))
+        self.assertFalse(warnings)
+        self.assertEqual([
+            ("Tegut Filiale 2714", "TEGUT"),
+            ("KAUFLAND GOETTINGEN IN", "KAUFLAND"),
+            ("GO ASIA DEUTSCHLAND", "GO ASIA"),
+            ("dm-drogerie markt", "dm-drogerie markt"),
+            ("LIDL", "LIDL"),
+            ("ALDI SÜD", "ALDI"),
+        ], [(item.merchant_raw, item.merchant_normalized) for item in transactions[:6]])
+        self.assertEqual(UNKNOWN_MERCHANT, transactions[6].merchant_raw)
+        self.assertEqual(UNKNOWN_MERCHANT, transactions[6].merchant_normalized)
+        self.assertEqual([MERCHANT_WARNING], transactions[6].warnings)
+
+    def test_db_account_statement_keeps_valid_counterparties(self):
+        transactions, _warnings = parse_deutsche_bank_text(self._fixture_text("db_account_statement_layout.txt"))
+        self.assertEqual("COFFEE SHOP BERLIN", transactions[0].merchant_raw)
+        self.assertEqual("PAYM.ORDER JOHN DOE", transactions[1].merchant_raw)
+        self.assertEqual("FAILED MERCHANT", transactions[2].merchant_raw)
+
+    def test_db_account_statement_retailer_patterns_override_processors(self):
+        text = "\n".join([
+            "Account statement",
+            "- 1,00", "SEPA Lastschrifteinzug von PAYPAL", "Payment Reference/E2E-Ref. ABC Einkauf bei dm-drogerie markt", "01-01-", "2026", "01-01-", "2026", "Reference",
+            "- 2,00", "SEPA Lastschrifteinzug von Verifone Payments GmbH", "Payment Reference/E2E-Ref. DEF Einkauf bei dm-drogerie markt", "02-01-", "2026", "02-01-", "2026", "Reference",
+            "- 3,00", "SEPA Lastschrifteinzug von S. Digits Payment GmbH", "LIDL sagt Danke für Ihren Einkauf", "03-01-", "2026", "03-01-", "2026", "Reference",
+            "- 4,00", "SEPA Lastschrifteinzug von Utility Provider GmbH", "Acme Company mention only", "04-01-", "2026", "04-01-", "2026", "Reference",
+            "- 5,00", "SEPA Lastschrifteinzug von Subscription Provider GmbH", "Malformed // text", "05-01-", "2026", "05-01-", "2026", "Reference",
+            "- 6,00", "Kartenzahlung", "KAUFLAND GOETTINGEN IN//GOETTINGEN/DE 24-10-2025T00:00:00 Karten", "06-01-", "2026", "06-01-", "2026", "Reference",
+        ])
+        transactions, _warnings = parse_deutsche_bank_text(text)
+        self.assertEqual("dm-drogerie markt", transactions[0].merchant_raw)
+        self.assertEqual("dm-drogerie markt", transactions[0].merchant_normalized)
+        self.assertEqual("dm-drogerie markt", transactions[1].merchant_raw)
+        self.assertEqual("LIDL", transactions[2].merchant_raw)
+        self.assertEqual("Utility Provider GmbH", transactions[3].merchant_raw)
+        self.assertEqual("Subscription Provider GmbH", transactions[4].merchant_raw)
+        self.assertEqual("KAUFLAND GOETTINGEN IN", transactions[5].merchant_raw)
+        self.assertEqual("KAUFLAND", transactions[5].merchant_normalized)
+
+    def test_db_account_statement_rejects_generic_multiline_card_candidates(self):
+        text = "\n".join([
+            "Account statement",
+            "- 1,00", "SEPA Lastschrifteinzug von Example Utility GmbH", "Payment Reference/E2E-Ref.//GOETTINGEN/DE", "01-01-2026T00:00:00 Karten", "01-01-", "2026", "01-01-", "2026", "Reference",
+            "- 2,00", "Kartenzahlung", "  payment reference/e2e-ref.  //GOETTINGEN/DE", "02-01-2026T00:00:00 Karten", "02-01-", "2026", "02-01-", "2026", "Reference",
+            "- 3,00", "Kartenzahlung", "KAUFLAND GOETTINGEN IN//GOETTINGEN/DE", "03-01-2026T00:00:00 Karten", "03-01-", "2026", "03-01-", "2026", "Reference",
+            "- 4,00", "Kartenzahlung", "Tegut Filiale 2714//GOETTINGEN/DE", "04-01-2026T00:00:00 Karten", "04-01-", "2026", "04-01-", "2026", "Reference",
+            "- 5,00", "Kartenzahlung", "GO ASIA DEUTSCHLAND//GOETTINGEN/DE", "05-01-2026T00:00:00 Karten", "05-01-", "2026", "05-01-", "2026", "Reference",
+        ])
+        transactions, _warnings = parse_deutsche_bank_text(text)
+        self.assertEqual("Example Utility GmbH", transactions[0].merchant_raw)
+        self.assertEqual(UNKNOWN_MERCHANT, transactions[1].merchant_raw)
+        self.assertEqual([MERCHANT_WARNING], transactions[1].warnings)
+        self.assertEqual(("KAUFLAND GOETTINGEN IN", "KAUFLAND"), (transactions[2].merchant_raw, transactions[2].merchant_normalized))
+        self.assertEqual(("Tegut Filiale 2714", "TEGUT"), (transactions[3].merchant_raw, transactions[3].merchant_normalized))
+        self.assertEqual(("GO ASIA DEUTSCHLAND", "GO ASIA"), (transactions[4].merchant_raw, transactions[4].merchant_normalized))
+
+    def test_db_account_statement_rejects_generic_einkauf_candidate(self):
+        text = "\n".join([
+            "Account statement",
+            "- 1,00", "SEPA Lastschrifteinzug von Example Utility GmbH", "Einkauf bei Payment Reference", "01-01-", "2026", "01-01-", "2026", "Reference",
+        ])
+        transactions, _warnings = parse_deutsche_bank_text(text)
+        self.assertEqual("Example Utility GmbH", transactions[0].merchant_raw)
+        self.assertNotEqual("Payment Reference", transactions[0].merchant_raw)
+
+    def test_unresolved_db_merchant_warning_reaches_preview_audit(self):
+        transactions, _warnings = parse_deutsche_bank_text(self._fixture_text("db_account_statement_merchants.txt"))
+        preview = ImportPreview("merchant-warning", "statement.pdf", "deutsche_bank_pdf", "merchant-hash", transactions, [])
+        original_preview = self.service.preview
+        self.service.preview = lambda filename, content, source_path="": preview
+        try:
+            result = self.service.preview_many([{"filename": "statement.pdf", "content": b"synthetic"}])
+        finally:
+            self.service.preview = original_preview
+        self.assertEqual(1, result["audit"]["warning_transaction_count"])
+        self.assertTrue(any(finding["code"] == "TRANSACTION_WARNING" and MERCHANT_WARNING in finding["message"] for finding in result["audit"]["findings"]))
 
     def test_paym_order_credit_is_not_auto_internal_transfer(self):
         transaction = self._db_statement_transaction()

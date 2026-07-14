@@ -22,6 +22,12 @@ SKIP_F2_PREFIXES = (
     "August ", "September ", "October ", "November ", "December ", "Account statement", "Account holder", "Previous balance",
 )
 FALLBACK_WARNING = "Unknown Deutsche Bank PDF layout: parsed with generic fallback."
+UNKNOWN_MERCHANT = "Unknown Deutsche Bank transaction"
+MERCHANT_WARNING = "Unable to determine Deutsche Bank merchant from payment details."
+GENERIC_MERCHANT_LABELS = {
+    "payment reference/e2e-ref.", "payment reference", "e2e-ref.",
+    "payment details", "reference", "karten", "kartenzahlung",
+}
 
 
 def extract_pdf_text(content: bytes) -> str:
@@ -197,10 +203,11 @@ def parse_account_statement_layout(text: str) -> list[ParsedTransaction]:
             i += 1
         if not booking_date:
             continue
-        merchant_raw = extract_merchant_f2(type_line, merchant_lines)
+        merchant_raw = extract_merchant_f2(type_line, merchant_lines, details_lines)
         description_raw = "\n".join(merchant_lines[1:] + details_lines)
         normalized_type = norm_type_f2(type_line)
         raw_blob = " ".join([type_line] + merchant_lines + details_lines)
+        warnings = [MERCHANT_WARNING] if merchant_raw == UNKNOWN_MERCHANT else []
         transactions.append(
             ParsedTransaction(
                 booking_date=booking_date,
@@ -208,7 +215,7 @@ def parse_account_statement_layout(text: str) -> list[ParsedTransaction]:
                 amount=amount,
                 currency="EUR",
                 merchant_raw=merchant_raw,
-                merchant_normalized=normalize_merchant(merchant_raw),
+                merchant_normalized=normalize_deutsche_bank_merchant(merchant_raw),
                 description_raw=description_raw,
                 account="Deutsche Bank",
                 transaction_type=normalized_type,
@@ -218,6 +225,7 @@ def parse_account_statement_layout(text: str) -> list[ParsedTransaction]:
                 is_internal_transfer=is_internal_transfer_f2(type_line, merchant_lines, details_lines),
                 is_failed_transaction=is_failed_transaction_f2(raw_blob),
                 raw={"layout": "db_account_statement", "type_line": type_line, "merchant_lines": merchant_lines, "details_lines": details_lines},
+                warnings=warnings,
             )
         )
         record_index += 1
@@ -280,7 +288,11 @@ def extract_merchant_f1(first_line: str, rest: list[str]) -> str:
     return extract_merchant_from_payment_details(rest) or first_line.strip()
 
 
-def extract_merchant_f2(type_line: str, merchant_lines: list[str]) -> str:
+def extract_merchant_f2(type_line: str, merchant_lines: list[str], details_lines: list[str] | None = None) -> str:
+    transaction_type = norm_type_f2(type_line)
+    explicit = extract_explicit_retailer([*merchant_lines, *(details_lines or [])], transaction_type)
+    if explicit:
+        return explicit
     prefixes = (
         "SEPA Lastschrifteinzug von ", "SEPA Überweisung an ", "SEPA Überweisung von ", "SEPA Echtzeitüberweisung an ",
         "SEPA Echtzeitüberweisung von ", "Echtzeitüberweisung an ", "Echtzeitüberweisung von ", "Dauerauftrag an ", "Gutschrift von ",
@@ -288,10 +300,66 @@ def extract_merchant_f2(type_line: str, merchant_lines: list[str]) -> str:
     for prefix in prefixes:
         if type_line.startswith(prefix):
             name = type_line[len(prefix):].strip()
-            if name:
-                return name
+            if name and not is_generic_merchant_label(name):
+                return normalize_merchant(name)
             break
-    return merchant_lines[0].strip() if merchant_lines else type_line.strip()
+    fallback = merchant_lines[0].strip() if merchant_lines else type_line.strip()
+    if is_generic_merchant_label(fallback):
+        return UNKNOWN_MERCHANT
+    return normalize_deutsche_bank_merchant(fallback)
+
+
+def is_generic_merchant_label(value: str) -> bool:
+    normalized = normalize_merchant(value).casefold()
+    if normalized in GENERIC_MERCHANT_LABELS:
+        return True
+    return bool(re.match(r"^(?:payment reference/e2e-ref\.|payment reference|e2e-ref\.)(?:\s|$)", normalized))
+
+
+def extract_explicit_retailer(lines: list[str], transaction_type: str) -> str:
+    for line in lines:
+        text = normalize_merchant(line)
+        einkauf = re.search(r"\bEinkauf bei\s+(.+)$", text, re.IGNORECASE)
+        if einkauf:
+            candidate = normalize_merchant(einkauf.group(1))
+            if not is_generic_merchant_label(candidate):
+                return candidate
+        retailer_message = re.match(r"^((?:ALDI|LIDL))\s+sagt\s+Danke\b", text, re.IGNORECASE)
+        if retailer_message:
+            return normalize_merchant(retailer_message.group(1))
+        if transaction_type == "Debit Card Payment":
+            card_match = re.match(
+                r"^(.+?)//.+\s+\d{2}-\d{2}-\d{4}T\d{2}:\d{2}:\d{2}\s+Karten$",
+                text,
+            )
+            if card_match:
+                candidate = normalize_merchant(card_match.group(1))
+                if not is_generic_merchant_label(candidate):
+                    return candidate
+    if transaction_type == "Debit Card Payment":
+        card_text = re.sub(r"\s+", " ", " ".join(lines)).strip()
+        card_match = re.search(r"(.+?)//.+\d{2}-\d{2}-\d{4}.+?Karten", card_text, re.IGNORECASE)
+        if card_match:
+            candidate = normalize_merchant(card_match.group(1))
+            if not is_generic_merchant_label(candidate):
+                return candidate
+    return ""
+
+
+def normalize_deutsche_bank_merchant(raw: str) -> str:
+    value = normalize_merchant(raw)
+    rules = (
+        (r"\bGO\s+ASIA\b", "GO ASIA"),
+        (r"\bKAUFLAND\b", "KAUFLAND"),
+        (r"\bTEGUT\b", "TEGUT"),
+        (r"\bALDI(?:\s+(?:NORD|SÜD))?\b", "ALDI"),
+        (r"\bLIDL\b", "LIDL"),
+        (r"\bdm[- ]drogerie\s+markt\b", "dm-drogerie markt"),
+    )
+    for pattern, canonical in rules:
+        if re.search(pattern, value, re.IGNORECASE):
+            return canonical
+    return value
 
 
 def norm_type_f2(line: str) -> str:
