@@ -43,11 +43,25 @@ class FinanceService:
     def preview_many(self, files: list[dict]) -> dict:
         previews: list[dict] = []
         preview_objects: list[ImportPreview] = []
+        source_files: list[dict] = []
         transactions: list[dict] = []
         errors: list[dict] = []
-        for upload in files:
+        for upload_index, upload in enumerate(files):
+            file_hash = hashlib.sha256(upload["content"]).hexdigest()
+            source_files.append({
+                "upload_index": upload_index,
+                "filename": upload["filename"],
+                "source_type": "",
+                "file_hash": file_hash,
+                "duplicate_source": self.db.source_exists(file_hash),
+            })
             try:
                 preview = self.preview(upload["filename"], upload["content"])
+                source_files[-1].update({
+                    "source_type": preview.source_type,
+                    "file_hash": preview.file_hash,
+                    "duplicate_source": preview.duplicate_source,
+                })
                 preview_objects.append(preview)
                 previews.append(preview.summary())
                 transactions.extend(self._preview_rows(preview))
@@ -70,10 +84,18 @@ class FinanceService:
                 audit_transactions.append(AuditTransaction(
                     global_index, transaction.currency, transaction.amount,
                     list(transaction.warnings), prepared["excluded_reason"],
+                    preview.source_type, preview.filename, transaction.booking_date.isoformat(),
+                    transaction.merchant_normalized, transaction.description_raw,
+                    transaction.external_id, transaction.currency.upper() != "EUR",
                 ))
                 global_index += 1
         parser_warnings = [warning for preview in preview_objects for warning in preview.parser_warnings]
-        audit = build_audit(len(files), audit_transactions, errors, empty_files, parser_warnings)
+        audit = build_audit(len(files), audit_transactions, errors, empty_files, parser_warnings, source_files)
+        for finding in audit["findings"]:
+            if finding["code"] == "DUPLICATE_SOURCE_FILE":
+                blockers.append({"filename": ", ".join(finding["details"]["filenames"]), "error": "批次中存在重复源文件"})
+            elif finding["code"] == "DUPLICATE_EXTERNAL_ID":
+                blockers.append({"filename": "", "error": "批次内存在重复 external ID"})
         return {
             "previews": previews,
             "transactions": transactions,

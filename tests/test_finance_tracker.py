@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import tempfile
 import unittest
 from datetime import date
@@ -13,6 +14,7 @@ from finance_tracker.domain import ParsedTransaction
 from finance_tracker.domain import ImportPreview
 from finance_tracker.importers import parse_deutsche_bank_text, parse_paypal_csv, parse_trade_republic_csv
 from finance_tracker.importers.deutsche_bank import FALLBACK_WARNING
+from finance_tracker.reconciliation.paypal import reconcile_paypal_rows
 from finance_tracker.services import FinanceService
 
 
@@ -53,6 +55,22 @@ class FinanceTrackerTests(unittest.TestCase):
 
     def _fixture_bytes(self, name: str) -> bytes:
         return (FIXTURES / name).read_bytes()
+
+    def _preview_audit(self, previews: list[ImportPreview]) -> dict:
+        by_filename = {preview.filename: preview for preview in previews}
+        original_preview = self.service.preview
+        self.service.preview = lambda filename, content, source_path="": by_filename[filename]
+        try:
+            return self.service.preview_many([{"filename": preview.filename, "content": b"synthetic"} for preview in previews])
+        finally:
+            self.service.preview = original_preview
+
+    def _synthetic_preview(self, filename: str, source_type: str, transactions: list[ParsedTransaction], **overrides) -> ImportPreview:
+        return ImportPreview(
+            overrides.pop("token", filename), filename, source_type, overrides.pop("file_hash", filename + "-hash"),
+            transactions, overrides.pop("warnings", []), overrides.pop("duplicate_source", False),
+            parser_warnings=overrides.pop("parser_warnings", []),
+        )
 
     def _import_db_text(self, filename: str, fixture_name: str) -> None:
         transactions, _warnings = parse_deutsche_bank_text(self._fixture_text(fixture_name))
@@ -355,6 +373,163 @@ class FinanceTrackerTests(unittest.TestCase):
         content = b"Date,Category,Amount,Currency,Description\n01.06.2026,CASH,0,EUR,Zero\n"
         audit = self.service.preview_many([{"filename": "zero.csv", "content": content}])["audit"]
         self.assertEqual("0.00", audit["totals_by_currency"]["EUR"])
+
+    def test_duplicate_source_file_is_one_blocking_finding_and_top_level_blocker(self):
+        preview = self._synthetic_preview("already.csv", "paypal_csv", [], duplicate_source=True, file_hash="hash-1")
+        result = self._preview_audit([preview])
+        findings = [item for item in result["audit"]["findings"] if item["code"] == "DUPLICATE_SOURCE_FILE"]
+        self.assertEqual(1, len(findings))
+        self.assertEqual("blocker", findings[0]["severity"])
+        self.assertEqual("hash-1", findings[0]["details"]["file_hash"])
+        self.assertFalse(result["can_confirm"])
+        self.assertFalse(result["audit"]["can_confirm"])
+        self.assertTrue(any(item["error"] == "批次中存在重复源文件" for item in result["blockers"]))
+
+    def test_repeated_duplicate_source_upload_has_one_finding(self):
+        preview = self._synthetic_preview("already.csv", "paypal_csv", [], duplicate_source=True, file_hash="hash-1")
+        result = self._preview_audit([preview, preview])
+        self.assertEqual(1, sum(item["code"] == "DUPLICATE_SOURCE_FILE" for item in result["audit"]["findings"]))
+
+    def test_new_source_file_has_no_duplicate_source_finding(self):
+        preview = self._synthetic_preview("new.csv", "paypal_csv", [], duplicate_source=False)
+        result = self._preview_audit([preview])
+        self.assertFalse(any(item["code"] == "DUPLICATE_SOURCE_FILE" for item in result["audit"]["findings"]))
+
+    def test_repeated_new_source_hash_is_one_grouped_finding_with_all_filenames(self):
+        first = self._synthetic_preview("first.csv", "paypal_csv", [], file_hash="same-hash")
+        second = self._synthetic_preview("renamed.csv", "trade_republic_csv", [], file_hash="same-hash")
+        result = self._preview_audit([first, second])
+        finding = next(item for item in result["audit"]["findings"] if item["code"] == "DUPLICATE_SOURCE_FILE")
+        self.assertEqual(["first.csv", "renamed.csv"], finding["details"]["filenames"])
+        self.assertEqual([0, 1], finding["details"]["upload_indexes"])
+        self.assertFalse(finding["details"]["exists_in_database"])
+        self.assertEqual(2, finding["details"]["occurrence_count"])
+
+    def test_duplicate_historical_hash_is_reported_even_when_parsing_fails(self):
+        content = b"not a valid pdf"
+        self.db.write_import({"path": "", "filename": "old.pdf", "source_type": "deutsche_bank_pdf", "sha256": hashlib.sha256(content).hexdigest()}, [])
+        result = self.service.preview_many([{"filename": "broken.pdf", "content": content}])
+        finding = next(item for item in result["audit"]["findings"] if item["code"] == "DUPLICATE_SOURCE_FILE")
+        self.assertEqual(["broken.pdf"], finding["details"]["filenames"])
+        self.assertTrue(finding["details"]["exists_in_database"])
+        self.assertFalse(result["can_confirm"])
+        self.assertEqual(result["can_confirm"], result["audit"]["can_confirm"])
+
+    def test_duplicate_external_id_is_grouped_by_source_type_and_trimmed(self):
+        transactions = [
+            self._db_statement_transaction(external_id=" ID-7 ", source_record_index=0),
+            self._db_statement_transaction(external_id="ID-7", source_record_index=1),
+            self._db_statement_transaction(external_id=" ID-7", source_record_index=2),
+        ]
+        result = self._preview_audit([self._synthetic_preview("duplicates.csv", "paypal_csv", transactions)])
+        finding = next(item for item in result["audit"]["findings"] if item["code"] == "DUPLICATE_EXTERNAL_ID")
+        self.assertEqual([0, 1, 2], finding["transaction_indexes"])
+        self.assertEqual(3, finding["details"]["occurrence_count"])
+        self.assertFalse(result["audit"]["can_confirm"])
+        self.assertTrue(any(item["error"] == "批次内存在重复 external ID" for item in result["blockers"]))
+
+    def test_external_id_empty_and_different_source_type_are_not_duplicates(self):
+        paypal = self._synthetic_preview("paypal.csv", "paypal_csv", [
+            self._db_statement_transaction(external_id="", source_record_index=0),
+            self._db_statement_transaction(external_id="same", source_record_index=1),
+        ])
+        bank = self._synthetic_preview("bank.pdf", "deutsche_bank_pdf", [
+            self._db_statement_transaction(external_id="same", source_record_index=0),
+        ])
+        result = self._preview_audit([paypal, bank])
+        self.assertFalse(any(item["code"] == "DUPLICATE_EXTERNAL_ID" for item in result["audit"]["findings"]))
+
+    def test_external_id_duplicate_detection_is_case_sensitive(self):
+        preview = self._synthetic_preview("case.csv", "paypal_csv", [
+            self._db_statement_transaction(external_id="abc", source_record_index=0),
+            self._db_statement_transaction(external_id="ABC", source_record_index=1),
+        ])
+        result = self._preview_audit([preview])
+        self.assertFalse(any(item["code"] == "DUPLICATE_EXTERNAL_ID" for item in result["audit"]["findings"]))
+
+    def test_unique_paypal_bank_match_uses_full_batch_indexes_and_info_status(self):
+        paypal = self._db_statement_transaction(amount=Decimal("-10.00"), booking_date=date(2026, 6, 1), external_id="pp")
+        bank = self._db_statement_transaction(amount=Decimal("-10.00"), booking_date=date(2026, 6, 6), merchant_raw="PayPal Europe", merchant_normalized="PayPal Europe", external_id="bank")
+        result = self._preview_audit([
+            self._synthetic_preview("paypal.csv", "paypal_csv", [paypal]),
+            self._synthetic_preview("bank.pdf", "deutsche_bank_pdf", [bank]),
+        ])
+        matches = [item for item in result["audit"]["findings"] if item["code"] == "PAYPAL_BANK_MATCH"]
+        self.assertEqual(1, len(matches))
+        self.assertEqual("info", matches[0]["severity"])
+        self.assertEqual([0, 1], matches[0]["transaction_indexes"])
+        self.assertEqual(5, matches[0]["details"]["date_difference_days"])
+        self.assertEqual("-10.00", matches[0]["details"]["canonical_amount"])
+        self.assertEqual(1, result["audit"]["info_finding_count"])
+        self.assertEqual("pass", result["audit"]["status"])
+        self.assertTrue(result["can_confirm"])
+
+    def test_paypal_bank_match_boundaries_and_eligibility(self):
+        paypal = self._db_statement_transaction(amount=Decimal("-10.00"), booking_date=date(2026, 6, 1))
+        cases = [
+            (date(2026, 6, 6), "PayPal Europe", Decimal("-10.00"), "EUR", True),
+            (date(2026, 6, 7), "PayPal Europe", Decimal("-10.00"), "EUR", False),
+            (date(2026, 6, 6), "PayPal Europe", Decimal("10.00"), "EUR", False),
+            (date(2026, 6, 6), "PayPal Europe", Decimal("-10.00"), "USD", False),
+            (date(2026, 6, 6), "Other bank", Decimal("-10.00"), "EUR", False),
+        ]
+        for index, (booking_date, merchant, amount, currency, expected) in enumerate(cases):
+            bank = self._db_statement_transaction(booking_date=booking_date, merchant_raw=merchant, merchant_normalized=merchant, amount=amount, currency=currency)
+            result = self._preview_audit([
+                self._synthetic_preview(f"paypal-{index}.csv", "paypal_csv", [paypal]),
+                self._synthetic_preview(f"bank-{index}.pdf", "deutsche_bank_pdf", [bank]),
+            ])
+            has_match = any(item["code"] == "PAYPAL_BANK_MATCH" for item in result["audit"]["findings"])
+            self.assertEqual(expected, has_match)
+
+    def test_preview_paypal_matching_compares_exact_decimal_amounts(self):
+        for paypal_amount, bank_amount, expected in (
+            (Decimal("1.001"), Decimal("1.009"), False),
+            (Decimal("1.001"), Decimal("1.001"), True),
+            (Decimal("1.001"), Decimal("1.0010"), True),
+            (Decimal("-1.001"), Decimal("1.001"), False),
+        ):
+            paypal = self._db_statement_transaction(amount=paypal_amount, booking_date=date(2026, 6, 1))
+            bank = self._db_statement_transaction(amount=bank_amount, booking_date=date(2026, 6, 2), merchant_raw="PAYPAL Bank", merchant_normalized="PAYPAL Bank")
+            result = self._preview_audit([
+                self._synthetic_preview("paypal.csv", "paypal_csv", [paypal]),
+                self._synthetic_preview("bank.pdf", "deutsche_bank_pdf", [bank]),
+            ])
+            self.assertEqual(expected, any(item["code"] == "PAYPAL_BANK_MATCH" for item in result["audit"]["findings"]))
+
+    def test_post_import_paypal_matching_keeps_legacy_stored_row_predicate(self):
+        paypal = {"id": 1, "amount_cents": 100, "currency": "EUR", "unsupported_currency": 1, "booking_date": "2026-06-01"}
+        bank = {"id": 2, "amount_cents": 100, "currency": "USD", "unsupported_currency": 1, "booking_date": "2026-06-02", "merchant": "PAYPAL Bank", "description": ""}
+        matches = reconcile_paypal_rows([paypal], [bank])
+        self.assertEqual(1, len(matches))
+        self.assertEqual("automatic", matches[0]["status"])
+
+    def test_ambiguous_paypal_bank_candidates_are_one_warning_group_without_matches(self):
+        paypal = self._db_statement_transaction(amount=Decimal("-10.00"), booking_date=date(2026, 6, 1))
+        banks = [self._db_statement_transaction(amount=Decimal("-10.00"), booking_date=date(2026, 6, day), merchant_raw=f"PAYPAL Bank {day}", merchant_normalized=f"PAYPAL Bank {day}") for day in (2, 3)]
+        result = self._preview_audit([
+            self._synthetic_preview("paypal.csv", "paypal_csv", [paypal]),
+            self._synthetic_preview("bank-a.pdf", "deutsche_bank_pdf", [banks[0]]),
+            self._synthetic_preview("bank-b.pdf", "deutsche_bank_pdf", [banks[1]]),
+        ])
+        ambiguous = [item for item in result["audit"]["findings"] if item["code"] == "PAYPAL_BANK_AMBIGUOUS"]
+        self.assertEqual(1, len(ambiguous))
+        self.assertEqual("warning", ambiguous[0]["severity"])
+        self.assertEqual([0, 1, 2], ambiguous[0]["transaction_indexes"])
+        self.assertFalse(any(item["code"] == "PAYPAL_BANK_MATCH" for item in result["audit"]["findings"]))
+        self.assertEqual("warning", result["audit"]["status"])
+        self.assertTrue(result["can_confirm"])
+
+    def test_two_paypal_transactions_sharing_one_bank_are_ambiguous(self):
+        paypals = [self._db_statement_transaction(amount=Decimal("-10.00"), booking_date=date(2026, 6, 1), external_id=f"pp-{index}") for index in (1, 2)]
+        bank = self._db_statement_transaction(amount=Decimal("-10.00"), booking_date=date(2026, 6, 2), merchant_raw="PAYPAL Bank", merchant_normalized="PAYPAL Bank")
+        result = self._preview_audit([
+            self._synthetic_preview("paypal.csv", "paypal_csv", paypals),
+            self._synthetic_preview("bank.pdf", "deutsche_bank_pdf", [bank]),
+        ])
+        ambiguous = [item for item in result["audit"]["findings"] if item["code"] == "PAYPAL_BANK_AMBIGUOUS"]
+        self.assertEqual(1, len(ambiguous))
+        self.assertEqual([0, 1, 2], ambiguous[0]["transaction_indexes"])
 
     def test_preview_many_returns_full_transactions_not_only_sample(self):
         header = "Date,Description,Currency,Gross,Name,Transaction ID,From Email Address\n"
