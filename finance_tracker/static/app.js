@@ -21,6 +21,74 @@ function escapeHtml(value) {
     .replaceAll('"', "&quot;");
 }
 
+const auditSeverityOrder = ["blocker", "warning", "info"];
+const auditFindingPresentation = {
+  DUPLICATE_SOURCE_FILE: ["重复的账单文件", "这个文件以前已经导入过，或者本次选择了内容完全相同的文件。"],
+  DUPLICATE_EXTERNAL_ID: ["重复的交易编号", "同一来源中有多条交易使用了相同的外部交易编号。"],
+  PAYPAL_BANK_MATCH: ["发现 PayPal 与银行对应记录", "系统发现一条 PayPal 记录与一条 Deutsche Bank 记录可能属于同一笔实际交易。"],
+  PAYPAL_BANK_AMBIGUOUS: ["PayPal 与银行记录存在多个候选", "一条记录可能对应多条候选记录，系统无法安全地自动确定对应关系。"],
+  UNSUPPORTED_CURRENCY: ["包含不支持的币种", "当前统一导入只允许 EUR 交易。"],
+  IMPORT_ERROR: ["文件解析失败", "文件无法解析，请检查文件格式后重试。"],
+  NO_TRANSACTIONS: ["未识别到交易", "文件中没有识别到可导入的交易。"],
+  TRANSACTION_WARNING: ["交易需要注意", "这笔交易包含需要核对的解析提示。"],
+  PARSER_WARNING: ["文件解析警告", "文件解析时发现需要核对的提示。"],
+};
+
+function auditStatusPresentation(status) {
+  return {
+    pass: ["检查通过", "未发现阻止导入的问题。", "good"],
+    warning: ["需要注意", "发现需要核对的问题，但仍可确认导入。", "warning"],
+    blocked: ["无法导入", "发现阻止导入的问题，处理后才能继续。", "bad"],
+  }[status] || ["检查通过", "未发现阻止导入的问题。", "good"];
+}
+
+function confirmationState(data, checked) {
+  const canConfirm = data.audit ? data.audit.can_confirm : data.can_confirm;
+  return { blocked: !canConfirm, checkboxDisabled: !canConfirm, buttonDisabled: !canConfirm || !checked };
+}
+
+function groupedAuditFindings(audit) {
+  return auditSeverityOrder.map(severity => ({ severity, findings: (audit.findings || []).filter(item => item.severity === severity) })).filter(group => group.findings.length);
+}
+
+function presentationForFinding(finding) {
+  return auditFindingPresentation[finding.code] || ["其他审计提示", "发现一条需要核对的审计提示。"];
+}
+
+function auditRows(state) {
+  return state.data.transactions.map((row, index) => ({ ...row, audit_index: index }));
+}
+
+function normalizedFilenameGroup(value) {
+  const names = Array.isArray(value) ? value : String(value ?? "").split(",");
+  return names.map(name => String(name).trim()).filter(Boolean).sort();
+}
+
+function legacyBlockerCoveredByAudit(blocker, auditFindings) {
+  const blockerGroup = normalizedFilenameGroup(blocker.filename);
+  if (!blockerGroup.length) return false;
+  return auditFindings.some(finding => {
+    if (finding.code !== "DUPLICATE_SOURCE_FILE") return false;
+    const auditGroup = normalizedFilenameGroup(finding.details?.filenames);
+    return auditGroup.length === blockerGroup.length && auditGroup.every((name, index) => name === blockerGroup[index]);
+  });
+}
+
+function legacyBlockersForDisplay(data) {
+  if (!data.audit) return data.blockers || [];
+  return (data.blockers || []).filter(item => {
+    if (legacyBlockerCoveredByAudit(item, data.audit.findings || [])) return false;
+    const findings = data.audit.findings || [];
+    return !findings.some(finding => {
+      const details = finding.details || {};
+      if (finding.code === "DUPLICATE_EXTERNAL_ID") return item.error?.includes("external ID");
+      if (finding.code === "UNSUPPORTED_CURRENCY") return (data.previews || []).some(preview => preview.filename === item.filename && preview.unsupported_currency);
+      if (finding.code === "IMPORT_ERROR" || finding.code === "NO_TRANSACTIONS") return details.filename === item.filename && finding.message === item.error;
+      return false;
+    });
+  });
+}
+
 function statusForPreviewRow(row) {
   if (row.duplicate_source) return "重复来源";
   if ((row.currency || "").toUpperCase() !== "EUR") return "非 EUR";
@@ -43,6 +111,7 @@ function transactionStatusLabel(row) {
 function buildPreviewState(data) {
   return {
     data,
+    auditIndexes: null,
     sourceFile: "",
     account: "",
     sourceType: "",
@@ -57,7 +126,8 @@ function buildPreviewState(data) {
 }
 
 function filterPreviewTransactions(state) {
-  let rows = state.data.transactions.slice();
+  let rows = auditRows(state);
+  if (state.auditIndexes) rows = rows.filter(row => state.auditIndexes.has(row.audit_index));
   if (state.sourceFile) rows = rows.filter(row => row.filename === state.sourceFile);
   if (state.account) rows = rows.filter(row => row.account === state.account);
   if (state.sourceType) rows = rows.filter(row => row.source_type === state.sourceType);
@@ -85,6 +155,29 @@ function filterPreviewTransactions(state) {
     return 0;
   });
   return rows;
+}
+
+function renderAuditFinding(finding, onFilter) {
+  const [title, fallback] = presentationForFinding(finding);
+  const body = auditFindingPresentation[finding.code] ? fallback : (finding.message || fallback);
+  const details = finding.details || {};
+  const detailParts = [];
+  if (finding.code === "DUPLICATE_SOURCE_FILE") detailParts.push(`文件：${(details.filenames || []).join("、")}；出现 ${details.occurrence_count || 0} 次${details.exists_in_database ? "；数据库中已有相同文件" : ""}`);
+  if (finding.code === "DUPLICATE_EXTERNAL_ID") detailParts.push(`来源：${details.source_type || "—"}；交易编号：${details.external_id || "—"}；出现 ${details.occurrence_count || 0} 次`);
+  if (finding.code === "PAYPAL_BANK_MATCH") detailParts.push(`金额：${details.canonical_amount || "—"} ${details.currency || ""}；PayPal：${details.paypal_booking_date || "—"}；银行：${details.bank_booking_date || "—"}；相差 ${details.date_difference_days ?? "—"} 天`);
+  if (finding.code === "PAYPAL_BANK_AMBIGUOUS") detailParts.push(`PayPal 记录 ${details.paypal_indexes?.length || 0} 条；银行记录 ${details.bank_indexes?.length || 0} 条；相关索引：${finding.transaction_indexes?.join("、") || "—"}`);
+  if (finding.code === "TRANSACTION_WARNING" || finding.code === "PARSER_WARNING") detailParts.push(details.warning || finding.message || fallback);
+  const indexes = Array.isArray(finding.transaction_indexes) ? finding.transaction_indexes : [];
+  return `<article class="audit-finding audit-${escapeHtml(finding.severity)}"><h4>${escapeHtml(title)}</h4><p>${escapeHtml(body)}</p>${detailParts.length ? `<p class="label">${escapeHtml(detailParts.join(" "))}</p>` : ""}<p class="audit-code">代码：${escapeHtml(finding.code)}</p>${indexes.length ? `<button type="button" class="secondary audit-filter-button" data-audit-indexes="${escapeHtml(JSON.stringify(indexes))}">查看相关交易</button>` : ""}</article>`;
+}
+
+function renderAuditPanel(audit) {
+  if (!audit) return "";
+  const [statusTitle, statusText, statusClass] = auditStatusPresentation(audit.status);
+  const metrics = [["源文件", audit.source_file_count], ["解析交易", audit.parsed_transaction_count], ["排除交易", audit.excluded_transaction_count], ["阻止问题", audit.blocking_finding_count], ["警告问题", audit.warning_finding_count], ["提示信息", audit.info_finding_count], ["含警告交易", audit.warning_transaction_count]];
+  const totals = Object.entries(audit.totals_by_currency || {}).map(([currency, value]) => `<span class="audit-total"><b>${escapeHtml(currency)}</b> ${escapeHtml(value)}</span>`).join("") || "—";
+  const groups = groupedAuditFindings(audit).map(group => `<section class="audit-group"><h3>${group.severity === "blocker" ? "阻止问题" : group.severity === "warning" ? "警告" : "信息"}</h3>${group.findings.map(renderAuditFinding).join("")}</section>`).join("");
+  return `<section class="panel audit-panel"><div class="audit-status audit-${statusClass}" role="status"><span aria-hidden="true">${audit.status === "blocked" ? "⛔" : audit.status === "warning" ? "⚠" : "✓"}</span><div><h2>${escapeHtml(statusTitle)}</h2><p>${escapeHtml(statusText)}</p></div></div><div class="audit-metrics">${metrics.map(([label, value]) => `<div class="card"><div class="label">${escapeHtml(label)}</div><div class="metric">${escapeHtml(value)}</div></div>`).join("")}</div><p><strong>按币种总额：</strong>${totals}</p>${groups || '<p class="notice">本次检查没有需要显示的审计发现。</p>'}<div id="audit-filter-notice" class="notice hidden"></div></section>`;
 }
 
 function renderPreviewRows(rows, count) {
@@ -131,8 +224,9 @@ function renderImportPreview(target, state) {
         <div class="card"><div class="label">非 EUR</div><div class="metric">${stats.unsupported_currency_count}</div></div>
       </div>
       ${baseline}
-      ${state.data.blockers.map(item => `<p class="warning">${escapeHtml(item.filename)}：${escapeHtml(item.error)}</p>`).join("")}
+      ${legacyBlockersForDisplay(state.data).map(item => `<p class="warning">${escapeHtml(item.filename)}：${escapeHtml(item.error)}</p>`).join("")}
     </section>
+    ${renderAuditPanel(state.data.audit)}
     <section class="panel">
       <h2>文件汇总</h2>
       ${table(
@@ -164,11 +258,11 @@ function renderImportPreview(target, state) {
       ${canShowMore ? '<button type="button" id="preview-more" class="secondary">继续显示</button>' : ""}
     </section>
     <section class="panel">
-      <label><input id="confirm-check" type="checkbox"> 我已经检查本次导入数据</label>
+      <label><input id="confirm-check" type="checkbox"> ${state.data.audit?.status === "warning" ? "我已查看以上警告，并确认继续导入" : "我已经检查本次导入数据"}</label>
       <div class="form-row">
-        <button id="confirm" disabled>统一确认导入</button>
+        <button type="button" id="confirm" disabled>统一确认导入</button>
       </div>
-      ${state.data.can_confirm ? "" : '<p class="warning">存在解析失败、非 EUR 阻断条件或零交易文件，暂不能确认导入。</p>'}
+      ${state.data.audit && !state.data.audit.can_confirm ? '<p class="warning">必须先处理上面的阻止问题，才能确认导入。</p>' : state.data.audit ? "" : state.data.can_confirm ? "" : '<p class="warning">存在解析失败、非 EUR 阻断条件或零交易文件，暂不能确认导入。</p>'}
     </section>
   </div>`;
 
@@ -217,6 +311,23 @@ function renderImportPreview(target, state) {
       renderImportPreview(target, state);
     };
   }
+  document.querySelectorAll(".audit-filter-button").forEach(button => {
+    button.onclick = () => {
+      state.auditIndexes = new Set(JSON.parse(button.dataset.auditIndexes));
+      state.renderedCount = state.chunkSize;
+      renderImportPreview(target, state);
+      const notice = document.querySelector("#audit-filter-notice");
+      if (notice) {
+        notice.classList.remove("hidden");
+        notice.innerHTML = `当前仅显示审计发现相关交易。<button type="button" class="secondary" id="clear-audit-filter">清除审计筛选</button>`;
+        document.querySelector("#clear-audit-filter").onclick = () => {
+          state.auditIndexes = null;
+          state.renderedCount = state.chunkSize;
+          renderImportPreview(target, state);
+        };
+      }
+    };
+  });
 }
 
 async function report(query = "") {
@@ -282,9 +393,15 @@ async function importPage() {
         const checkbox = document.querySelector("#confirm-check");
         const button = document.querySelector("#confirm");
         if (!checkbox || !button) return;
-        button.disabled = !checkbox.checked || !data.can_confirm;
+        const stateForConfirmation = () => confirmationState(data, checkbox.checked);
+        const updateConfirmation = () => {
+          const current = stateForConfirmation();
+          checkbox.disabled = current.checkboxDisabled;
+          button.disabled = current.buttonDisabled;
+        };
+        updateConfirmation();
         checkbox.onchange = () => {
-          button.disabled = !checkbox.checked || !data.can_confirm;
+          updateConfirmation();
         };
         button.onclick = async () => {
           const result = await request("/api/import/confirm", {
@@ -364,6 +481,10 @@ async function categories() {
     });
     categories();
   };
+}
+
+if (typeof globalThis !== "undefined") {
+  globalThis.financeTrackerUi = { auditStatusPresentation, confirmationState, groupedAuditFindings, presentationForFinding, renderAuditFinding, filterPreviewTransactions, normalizedFilenameGroup, legacyBlockerCoveredByAudit, legacyBlockersForDisplay };
 }
 
 const page = document.body.dataset.page;
