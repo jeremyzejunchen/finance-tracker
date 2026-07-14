@@ -29,7 +29,10 @@ def extract_pdf_text(content: bytes) -> str:
         import fitz
     except ImportError as error:
         raise ImportErrorForUser("PDF 解析依赖未安装。") from error
-    document = fitz.open(stream=content, filetype="pdf")
+    try:
+        document = fitz.open(stream=content, filetype="pdf")
+    except Exception as error:
+        raise ImportErrorForUser("无法读取 Deutsche Bank PDF 文件。") from error
     return "\n".join(page.get_text("text") for page in document)
 
 

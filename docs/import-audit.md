@@ -34,6 +34,49 @@ correct, duplicate-free, correctly categorized, or correctly reconciled.
 The top-level preview `can_confirm` is derived from the audit's `can_confirm`,
 so the two values are guaranteed to agree.
 
-Planned future rules (not implemented): duplicate detection findings,
-baseline-difference findings, malformed source-record diagnostics, and richer
-parser-specific warning codes.
+Planned future rules (not implemented): baseline-difference findings,
+malformed source-record diagnostics, and richer parser-specific warning codes.
+
+## Duplicate and overlap findings
+
+The preview audit also reports these deterministic findings:
+
+- `DUPLICATE_SOURCE_FILE` (`blocker`): the uploaded file SHA256 already exists
+  in the database, or the same hash occurs more than once in the current
+  upload batch. It is emitted once per hash and includes every involved
+  filename and upload index. Identical bytes under different filenames are one
+  source identity.
+- `DUPLICATE_EXTERNAL_ID` (`blocker`): two or more current-batch transactions
+  share the same trimmed, non-empty external ID within the same source type.
+  IDs from different source types are not combined. IDs are case-sensitive:
+  trimming is applied, but case is preserved. One grouped finding is emitted
+  per duplicated identity.
+- `PAYPAL_BANK_MATCH` (`info`): a mutually unique PayPal/Deutsche Bank
+  candidate pair. Info findings do not change a clean audit to `warning`.
+- `PAYPAL_BANK_AMBIGUOUS` (`warning`): a connected candidate group where one
+  side has multiple eligible candidates. Ambiguous transactions do not also
+  receive a unique-match finding.
+
+Preview PayPal-bank eligibility requires one `paypal_csv` and one
+`deutsche_bank_pdf` transaction, equal supported currencies, exact equal
+`Decimal` amounts including sign, dates no more than five calendar days apart
+(five is inclusive), and `PAYPAL` in the bank merchant or description,
+case-insensitively. Unsupported currencies are ineligible. A unique match
+requires exactly one candidate on both sides. Candidate findings are audit-only:
+they do not mutate
+preview transactions, excluded reasons, categories, or database reconciliation
+state. A candidate match is not proof that the records represent the same
+real-world transaction.
+
+Preview matching and post-import matching are related but intentionally not
+identical. Post-import `reconcile_paypal_rows` retains its existing stored-row
+predicate: equal stored `amount_cents`, a five-day date window, and `PAYPAL` in
+the bank text. It does not apply preview currency or unsupported-currency
+restrictions.
+
+All finding indexes refer to the full batch transaction list. Duplicate-source
+and external-ID blockers are also represented in the existing top-level
+`blockers` field, and the top-level `can_confirm` is derived from the audit
+value. General fuzzy duplicate detection and historical individual-transaction
+comparison are not implemented; this audit is not complete duplicate detection
+or complete PayPal reconciliation.

@@ -56,3 +56,34 @@
 - Review `git diff`
 - Run `scripts/doctor.ps1`
 - Run `scripts/test.ps1`
+
+## Definition of done
+
+A coding task is not complete merely because the requested code was written.
+Before reporting completion, the agent must:
+
+- compare the implementation against every explicit acceptance criterion
+- add or update focused tests for every changed behavior
+- run `pwsh -NoProfile -File .\scripts\doctor.ps1`, `pwsh -NoProfile -File .\scripts\test.ps1`, `git diff --check`, `git status --short`, and `git --no-pager diff`
+- verify that all existing tests still pass
+- inspect the complete diff for unrelated changes, weakened or deleted tests, duplicated logic, compatibility regressions, unsafe money calculations, and accidental database, UI, dependency, configuration, or workflow changes
+- confirm that only intended files changed
+- report unproven acceptance criteria, assumptions, limitations, and remaining risks
+- never claim completion while tests are failing
+- never weaken a test merely to obtain a passing result
+- never commit or push unless explicitly instructed
+
+## Self-review requirements
+
+After implementation and testing, perform a review-only pass against the complete
+working-tree diff as though it were written by another engineer. Review:
+
+- functional and business-rule correctness, including edge cases and false positives or negatives
+- backward compatibility, data integrity, financial-calculation safety, and deterministic output
+- test quality and documentation accuracy
+- scope compliance and accidental changes outside the request
+
+The final response must clearly separate implementation completed, automated
+checks passed, self-review findings, confirmed defects fixed during self-review,
+assumptions, behavior not automatically verified, and items requiring
+product-owner judgment.
