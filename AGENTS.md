@@ -15,6 +15,106 @@
 - Explicit rebuild: `pwsh -NoProfile -File .\scripts\bootstrap.ps1 -Recreate`
 - Tests: `pwsh -NoProfile -File .\scripts\test.ps1`
 
+## Tool and plugin policy
+
+Use the repository's existing instructions, focused tests, and standard
+verification commands for small, well-defined fixes.
+
+Use optional skills only when they are installed, available, and materially
+useful for the task. Do not invoke a skill merely because it is available.
+
+### Superpowers
+
+Use Superpowers for work that genuinely requires design and implementation
+planning, such as:
+
+* complex features spanning multiple components
+* database schema or migration changes
+* significant architectural decisions
+* unclear requirements that require structured exploration
+* work with multiple viable implementation approaches and meaningful tradeoffs
+
+Do not use Superpowers for small bug fixes, localized parser changes,
+documentation edits, straightforward test additions, or narrowly defined
+refactoring.
+
+### Ponytail
+
+Use Ponytail primarily as a final review pass for:
+
+* unnecessary dependencies
+* duplicated logic
+* overengineering
+* excessive abstraction
+* avoidable scope expansion
+* simpler implementations that preserve the required behavior
+
+Do not invoke Superpowers and Ponytail in the same task unless the user
+explicitly requests both and their roles are clearly separated.
+
+Ponytail review does not replace:
+
+* focused regression tests
+* the complete test suite
+* `git diff --check`
+* complete-diff inspection
+* an independent code review when one is required
+
+### Browser and Playwright testing
+
+Use Playwright when the changed product behavior depends on a real browser
+workflow, including:
+
+* file selection and upload
+* import preview rendering
+* audit status and finding presentation
+* transaction filtering interactions
+* warning acknowledgement
+* blocked confirmation behavior
+* confirmation requests
+* browser-visible persistence workflows
+
+A temporary browser interaction performed by an agent is a smoke test only. It
+does not count as durable automated verification.
+
+When a browser workflow is important to the product behavior or protects
+against a confirmed regression, its Playwright test must:
+
+* be committed to the repository
+* use sanitized synthetic fixtures
+* run in CI
+* make deterministic assertions
+* avoid real personal or financial data
+* avoid depending on external network services
+
+Do not add Playwright or another browser framework solely for a backend-only
+change.
+
+Before introducing a new browser-testing dependency:
+
+1. inspect the repository's existing test tooling
+2. prefer existing native or standard-library solutions when they provide
+   meaningful coverage
+3. explain why browser-level automation is necessary
+4. keep the dependency and configuration change minimal
+5. do not add the dependency when the user has restricted dependency changes
+
+### Financial-data privacy
+
+Never commit or upload:
+
+* real bank statements
+* real PayPal exports
+* IBANs or account numbers
+* transaction references
+* personal names extracted from statements
+* browser screenshots, videos, traces, or logs containing real financial data
+
+All committed parser and browser fixtures must be synthetic and sanitized.
+
+Browser tests must use a temporary database and must not modify the user's
+permanent application database.
+
 ## Retry policy
 
 - Never run an unchanged failed command more than twice.
