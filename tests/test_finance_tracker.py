@@ -222,6 +222,24 @@ class FinanceTrackerTests(unittest.TestCase):
         self.assertEqual("Example Utility GmbH", transactions[0].merchant_raw)
         self.assertNotEqual("Payment Reference", transactions[0].merchant_raw)
 
+    def test_db_account_statement_supports_card_metadata_variants_and_skips_prefix(self):
+        text = "\n".join([
+            "Account statement",
+            "- 1,00", "Kartenzahlung", "Payment Reference/E2E-Ref.", "Tegut Filiale 2714//Goettingen/DE", "07-08-2025T18:52:34 Karten", "07-08-", "2025", "07-08-", "2025", "Reference",
+            "- 2,00", "Kartenzahlung", "ALDI NORD//GOETTINGEN/DE", "11-08-2025T20:15:02 Kartennr. 53549", "11-08-", "2025", "11-08-", "2025", "Reference",
+            "- 3,00", "Kartenzahlung", "GO ASIA DEUTSCHLAND//GOETTINGEN/DE", "09-08-2025T19:25:14 Karte", "09-08-", "2025", "09-08-", "2025", "Reference",
+            "- 4,00", "Kartenzahlung", "KAUFLAND GOETTINGEN IN//GOETTINGEN/DE", "10-08-2025T00:00:00 Karten", "10-08-", "2025", "10-08-", "2025", "Reference",
+            "- 5,00", "Kartenzahlung", "UMG GASTRONOMIE//GOETTINGEN/DE", "12-08-2025T12:00:00 Folgenr.", "12-08-", "2025", "12-08-", "2025", "Reference",
+        ])
+        transactions, _warnings = parse_deutsche_bank_text(text)
+        self.assertEqual([
+            ("Tegut Filiale 2714", "TEGUT"),
+            ("ALDI NORD", "ALDI"),
+            ("GO ASIA DEUTSCHLAND", "GO ASIA"),
+            ("KAUFLAND GOETTINGEN IN", "KAUFLAND"),
+            ("UMG GASTRONOMIE", "UMG GASTRONOMIE"),
+        ], [(item.merchant_raw, item.merchant_normalized) for item in transactions])
+
     def test_unresolved_db_merchant_warning_reaches_preview_audit(self):
         transactions, _warnings = parse_deutsche_bank_text(self._fixture_text("db_account_statement_merchants.txt"))
         preview = ImportPreview("merchant-warning", "statement.pdf", "deutsche_bank_pdf", "merchant-hash", transactions, [])
