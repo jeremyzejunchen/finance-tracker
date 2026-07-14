@@ -327,21 +327,20 @@ def extract_explicit_retailer(lines: list[str], transaction_type: str) -> str:
         retailer_message = re.match(r"^((?:ALDI|LIDL))\s+sagt\s+Danke\b", text, re.IGNORECASE)
         if retailer_message:
             return normalize_merchant(retailer_message.group(1))
-        if transaction_type == "Debit Card Payment":
-            card_match = re.match(
-                r"^(.+?)//.+\s+\d{2}-\d{2}-\d{4}T\d{2}:\d{2}:\d{2}\s+Karten$",
-                text,
-            )
-            if card_match:
-                candidate = normalize_merchant(card_match.group(1))
-                if not is_generic_merchant_label(candidate):
-                    return candidate
     if transaction_type == "Debit Card Payment":
-        card_text = re.sub(r"\s+", " ", " ".join(lines)).strip()
-        card_match = re.search(r"(.+?)//.+\d{2}-\d{2}-\d{4}.+?Karten", card_text, re.IGNORECASE)
-        if card_match:
-            candidate = normalize_merchant(card_match.group(1))
-            if not is_generic_merchant_label(candidate):
+        card_suffix = r"(?:Karten?|Kartennr\.\s+\d+|Folgenr\.)"
+        for index, line in enumerate(lines):
+            if "//" not in line:
+                continue
+            candidate = normalize_merchant(line.split("//", 1)[0])
+            if not candidate or is_generic_merchant_label(candidate):
+                continue
+            card_tail = " ".join([line.split("//", 1)[1], *lines[index + 1:index + 4]])
+            if re.search(
+                rf"^.+/[A-Z]{{2}}\b.+\d{{2}}-\d{{2}}-\d{{4}}T\d{{2}}:\d{{2}}:\d{{2}}\s+{card_suffix}(?:\s|$)",
+                card_tail,
+                re.IGNORECASE,
+            ):
                 return candidate
     return ""
 
