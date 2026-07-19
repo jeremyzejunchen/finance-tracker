@@ -172,7 +172,12 @@ Before reporting completion, the agent must:
 - report unproven acceptance criteria, assumptions, limitations, and remaining risks
 - never claim completion while tests are failing
 - never weaken a test merely to obtain a passing result
-- never commit or push unless explicitly instructed
+
+## Automatic Issue Publication
+
+- After completing a GitHub Issue, passing all required verification, and completing self-review, automatically stage the intended changes, create one focused commit, push the current issue branch, and create or update a draft pull request.
+- Do not publish while tests are failing, verification is incomplete, the working tree contains unrelated changes, or financial-data privacy checks fail.
+- Each automatic publish must report the commit hash, branch, pull request URL, passed checks, and remaining product risks.
 
 ## Self-review requirements
 
