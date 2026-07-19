@@ -1024,6 +1024,50 @@ class FinanceTrackerTests(unittest.TestCase):
         self.assertEqual("manual", manual["category_status"])
         self.assertEqual(1, self.db.audit_count("merchant_rule_backfill"))
 
+    def test_statement_directory_scan_recurses_infers_accounts_and_marks_duplicates(self):
+        from finance_tracker.statement_directory import StatementDirectoryScanner
+
+        root = Path(self.directory.name) / "银行流水"
+        nested = root / "nested"
+        nested.mkdir(parents=True)
+        (root / "main.pdf").write_bytes(b"synthetic-pdf")
+        (nested / "joint-czj.csv").write_bytes(b"synthetic-czj")
+        duplicate = nested / "joint-cr.csv"
+        duplicate.write_bytes(b"synthetic-cr")
+        (root / "unknown.csv").write_bytes(b"synthetic-unknown")
+        duplicate_hash = hashlib.sha256(duplicate.read_bytes()).hexdigest()
+        self.db.write_import({"path": "", "filename": "already.csv", "source_type": "paypal_csv", "sha256": duplicate_hash}, [])
+
+        rows = StatementDirectoryScanner(root, self.db.source_exists).scan()
+
+        by_path = {row.relative_path: row for row in rows}
+        self.assertEqual("ME", by_path["main.pdf"].account)
+        self.assertEqual("ME", by_path["nested/joint-czj.csv"].account)
+        self.assertEqual("WIFE", by_path["nested/joint-cr.csv"].account)
+        self.assertEqual("already_imported", by_path["nested/joint-cr.csv"].status)
+        self.assertEqual("needs_account_selection", by_path["unknown.csv"].status)
+
+    def test_preview_scanned_file_uses_inferred_account(self):
+        root = Path(self.directory.name) / "银行流水"
+        root.mkdir()
+        statement = root / "paypal-czj.csv"
+        statement.write_bytes(self._fixture_bytes("paypal_en.csv"))
+
+        result = self.service.preview_scanned_files(["paypal-czj.csv"], root)
+
+        self.assertEqual("ME", result["transactions"][0]["account"])
+
+    def test_server_uses_injected_statement_directory(self):
+        from finance_tracker.app import build_server
+
+        root = Path(self.directory.name) / "scan-root"
+        root.mkdir()
+        server = build_server("127.0.0.1", 0, Path(self.directory.name) / "server.sqlite3", root)
+        try:
+            self.assertEqual(root.resolve(), server.RequestHandlerClass.statement_root)
+        finally:
+            server.server_close()
+
     def test_legacy_migration_keeps_originals_when_project_data_already_exists(self):
         project_root = Path(self.directory.name) / "project"
         legacy_root = Path(self.directory.name) / "legacy"
