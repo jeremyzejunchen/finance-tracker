@@ -486,12 +486,151 @@ async function categories() {
   };
 }
 
+function merchantReviewPriority(group) {
+  if ((group.merchant || "").toLowerCase().startsWith("unknown ")) return 0;
+  if ((group.category_reason || "").startsWith("rule_conflict")) return 1;
+  return 2;
+}
+
+function merchantReviewAction(event) {
+  if (event.key === "Enter") return "apply";
+  if (event.key.toLowerCase() === "s") return "skip";
+  if (event.key.toLowerCase() === "e") return "override";
+  return "";
+}
+
+async function merchantReview() {
+  const [groups, categories] = await Promise.all([request("/api/merchant-review/groups"), request("/api/categories")]);
+  const state = {
+    groups: [...groups].sort((left, right) => merchantReviewPriority(left) - merchantReviewPriority(right) || right.transaction_count - left.transaction_count || left.merchant.localeCompare(right.merchant)),
+    categories,
+    selectedCategoryId: "",
+    impact: null,
+    details: null,
+    error: "",
+  };
+
+  const selectedGroup = () => state.groups[0];
+  const categoryOptions = (selected = "") => `<option value="">请选择分类</option>${state.categories.map(category => `<option value="${escapeHtml(category.id)}"${String(category.id) === String(selected) ? " selected" : ""}>${escapeHtml(category.level1)} / ${escapeHtml(category.level2)} / ${escapeHtml(category.level3)}</option>`).join("")}`;
+  const groupUrl = (path, group) => `${path}?${new URLSearchParams({ merchant: group.merchant, direction: group.direction })}`;
+
+  const render = () => {
+    const group = selectedGroup();
+    if (!group) {
+      app.innerHTML = '<section class="panel"><p class="notice">没有待复核的商户组。</p></section>';
+      return;
+    }
+    const sample = state.details ? state.details.slice(0, 5) : [];
+    app.innerHTML = `<section class="panel merchant-review-panel">
+      <h2>商户复核</h2>
+      <p class="label">按 Enter 应用长期规则，S 跳过，E 展开逐笔覆盖。</p>
+      ${state.error ? `<p class="warning">${escapeHtml(state.error)}</p>` : ""}
+      <div class="grid">
+        <div class="card"><div class="label">商户</div><div class="metric">${escapeHtml(group.merchant)}</div></div>
+        <div class="card"><div class="label">方向</div><div class="metric">${escapeHtml(group.direction === "expense" ? "支出" : "收入")}</div></div>
+        <div class="card"><div class="label">笔数</div><div class="metric">${escapeHtml(group.transaction_count)}</div></div>
+        <div class="card"><div class="label">金额</div><div class="metric">${escapeHtml(money(group.amount_cents))}</div></div>
+        <div class="card"><div class="label">日期范围</div><div class="metric">${escapeHtml(group.date_from)} ~ ${escapeHtml(group.date_to)}</div></div>
+        <div class="card"><div class="label">账户数</div><div class="metric">${escapeHtml(group.account_count)}</div></div>
+      </div>
+      <label>分类<select id="merchant-review-category">${categoryOptions(state.selectedCategoryId)}</select></label>
+      <div class="form-row">
+        <button id="merchant-review-apply" type="button" ${state.selectedCategoryId ? "" : "disabled"}>${state.impact ? "确认应用长期规则" : "应用长期规则"}</button>
+        <button id="merchant-review-skip" type="button" class="secondary">跳过</button>
+        <button id="merchant-review-override" type="button" class="secondary">展开仅此笔</button>
+      </div>
+      ${state.impact ? `<p class="warning">将影响 ${escapeHtml(state.impact.affected_count)} 笔交易，日期范围 ${escapeHtml(state.impact.date_from)} ~ ${escapeHtml(state.impact.date_to)}，涉及 ${escapeHtml(state.impact.account_count)} 个账户。再次确认后才会应用长期规则。</p>` : ""}
+      ${sample.length ? `<section><h3>有限样本</h3>${table(["日期", "金额", "账户"], sample.map(row => `<tr><td>${escapeHtml(row.booking_date)}</td><td class="${row.amount_cents >= 0 ? "amount-positive" : "amount-negative"}">${escapeHtml(money(row.amount_cents))}</td><td>${escapeHtml(row.account)}</td></tr>`))}</section>
+      <section><h3>逐笔覆盖</h3>${table(["日期", "金额", "账户", "仅此笔"], state.details.map(row => `<tr><td>${escapeHtml(row.booking_date)}</td><td class="${row.amount_cents >= 0 ? "amount-positive" : "amount-negative"}">${escapeHtml(money(row.amount_cents))}</td><td>${escapeHtml(row.account)}</td><td><select data-override-category="${escapeHtml(row.id)}">${categoryOptions(row.category_id || state.selectedCategoryId)}</select> <button type="button" class="secondary" data-override-id="${escapeHtml(row.id)}">仅此笔</button></td></tr>`))}</section>` : ""}
+    </section>`;
+    document.querySelector("#merchant-review-category").onchange = event => {
+      state.selectedCategoryId = event.target.value;
+      state.impact = null;
+      state.error = "";
+      render();
+    };
+    document.querySelector("#merchant-review-apply").onclick = apply;
+    document.querySelector("#merchant-review-skip").onclick = skip;
+    document.querySelector("#merchant-review-override").onclick = loadDetails;
+    document.querySelectorAll("[data-override-id]").forEach(button => {
+      button.onclick = async () => {
+        const categoryId = document.querySelector(`[data-override-category="${button.dataset.overrideId}"]`).value;
+        if (!categoryId) return;
+        try {
+          await request("/api/merchant-review/override", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ transaction_id: Number(button.dataset.overrideId), category_id: Number(categoryId) }) });
+          state.details = state.details.filter(row => String(row.id) !== button.dataset.overrideId);
+          state.error = "";
+          render();
+        } catch (error) {
+          state.error = error.message;
+          render();
+        }
+      };
+    });
+  };
+
+  const reload = async () => {
+    state.groups = (await request("/api/merchant-review/groups")).sort((left, right) => merchantReviewPriority(left) - merchantReviewPriority(right) || right.transaction_count - left.transaction_count || left.merchant.localeCompare(right.merchant));
+    state.selectedCategoryId = "";
+    state.impact = null;
+    state.details = null;
+    state.error = "";
+    render();
+  };
+  const apply = async () => {
+    const group = selectedGroup();
+    if (!state.selectedCategoryId) return;
+    try {
+      if (!state.impact) {
+        state.impact = await request(groupUrl("/api/merchant-review/impact", group));
+        state.error = "";
+        render();
+        return;
+      }
+      await request("/api/merchant-review/apply", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ merchant: group.merchant, direction: group.direction, category_id: Number(state.selectedCategoryId) }) });
+      await reload();
+    } catch (error) {
+      state.error = error.message;
+      render();
+    }
+  };
+  const skip = async () => {
+    const group = selectedGroup();
+    try {
+      await request("/api/merchant-review/skip", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ merchant: group.merchant, direction: group.direction }) });
+      await reload();
+    } catch (error) {
+      state.error = error.message;
+      render();
+    }
+  };
+  const loadDetails = async () => {
+    try {
+      state.details = await request(groupUrl("/api/merchant-review/group", selectedGroup()));
+      state.error = "";
+      render();
+    } catch (error) {
+      state.error = error.message;
+      render();
+    }
+  };
+  document.addEventListener("keydown", event => {
+    if (["INPUT", "SELECT", "TEXTAREA"].includes(event.target.tagName)) return;
+    const action = merchantReviewAction(event);
+    if (!action) return;
+    const handlers = { apply, skip, override: loadDetails };
+    event.preventDefault();
+    handlers[action]();
+  });
+  render();
+}
+
 if (typeof globalThis !== "undefined") {
-  globalThis.financeTrackerUi = { auditStatusPresentation, confirmationState, groupedAuditFindings, presentationForFinding, renderAuditFinding, filterPreviewTransactions, normalizedFilenameGroup, legacyBlockerCoveredByAudit, legacyBlockersForDisplay };
+  globalThis.financeTrackerUi = { auditStatusPresentation, confirmationState, groupedAuditFindings, presentationForFinding, renderAuditFinding, filterPreviewTransactions, normalizedFilenameGroup, legacyBlockerCoveredByAudit, legacyBlockersForDisplay, merchantReviewPriority, merchantReviewAction };
 }
 
 const page = document.body.dataset.page;
-({ "/": report, "/import": importPage, "/transactions": () => transactions(false), "/review": () => transactions(true), "/categories": categories }[page])()
+({ "/": report, "/import": importPage, "/transactions": () => transactions(false), "/review": () => transactions(true), "/merchant-review": merchantReview, "/categories": categories }[page])()
   .catch(error => {
     app.innerHTML = `<p class="warning">${escapeHtml(error.message)}</p>`;
   });

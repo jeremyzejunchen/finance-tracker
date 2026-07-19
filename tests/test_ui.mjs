@@ -50,4 +50,10 @@ assert.deepEqual(Array.from(displayedBlockers).map(item => item.filename), ["a.p
 assert.equal(ui.legacyBlockersForDisplay({ blockers: [{ filename: "a.pdf, b.pdf", error: "legacy" }] }).length, 1);
 assert.equal(ui.legacyBlockersForDisplay({ audit: { findings: [{ code: "DUPLICATE_EXTERNAL_ID", details: {} }] }, blockers: [{ filename: "", error: "批次内存在重复 external ID" }] }).length, 0);
 
+assert.equal(ui.merchantReviewPriority({ merchant: "Unknown bank transaction", category_reason: "unclassified" }), 0);
+assert.equal(ui.merchantReviewPriority({ merchant: "SHOP", category_reason: "rule_conflict_contains" }), 1);
+assert.equal(ui.merchantReviewAction({ key: "Enter" }), "apply");
+assert.equal(ui.merchantReviewAction({ key: "s" }), "skip");
+assert.equal(ui.merchantReviewAction({ key: "E" }), "override");
+
 console.log("UI logic tests: 8 assertions passed");
