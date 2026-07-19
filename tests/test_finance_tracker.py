@@ -185,6 +185,64 @@ class FinanceTrackerTests(unittest.TestCase):
         self.db.skip_merchant_review_group("SYNTHETIC SHOP", "expense")
         self.assertEqual([UNKNOWN_MERCHANT], [row["merchant"] for row in self.db.merchant_review_groups()])
 
+    def test_review_rule_backfills_group_and_preserves_manual_override(self):
+        ids = self._seed_review_rows([
+            ("SYNTHETIC SHOP", -1000, "unclassified", "", "cash"),
+            ("SYNTHETIC SHOP", -2000, "unclassified", "", "cash"),
+        ])
+        category_id = next(row["id"] for row in self.db.category_rows() if row["bucket"] == "expense")
+        self.db.set_override(ids[0], category_id, "synthetic exception")
+
+        self.assertEqual(1, self.service.merchant_review_impact("SYNTHETIC SHOP", "expense")["affected_count"])
+        self.assertEqual(1, self.service.apply_merchant_review_rule("SYNTHETIC SHOP", "expense", category_id)["updated_count"])
+
+        rows = {row["id"]: row for row in self.db.transaction_rows()}
+        self.assertEqual("manual", rows[ids[0]]["category_status"])
+        self.assertEqual("merchant_review_rule", rows[ids[1]]["category_reason"])
+        self.assertEqual(1, self.db.audit_count("merchant_review_rule_applied"))
+
+    def test_review_rule_rejects_wrong_bucket_and_expired_group(self):
+        self._seed_review_rows([("SYNTHETIC SHOP", -1000, "unclassified", "", "cash")])
+        expense_category_id = next(row["id"] for row in self.db.category_rows() if row["bucket"] == "expense")
+        income_category_id = next(row["id"] for row in self.db.category_rows() if row["bucket"] == "income")
+
+        with self.assertRaisesRegex(ValueError, "分类"):
+            self.service.apply_merchant_review_rule("SYNTHETIC SHOP", "expense", income_category_id)
+        with self.assertRaisesRegex(ValueError, "过期"):
+            self.service.apply_merchant_review_rule("MISSING SHOP", "expense", expense_category_id)
+
+    def test_review_rule_replaces_existing_direction_rule(self):
+        self._seed_review_rows([("SYNTHETIC SHOP", -1000, "unclassified", "", "cash")])
+        first_expense_category_id = next(row["id"] for row in self.db.category_rows() if row["bucket"] == "expense")
+        self.db.add_category("Synthetic", "Synthetic", "Alternative", "expense")
+        replacement_category_id = next(row["id"] for row in self.db.category_rows() if row["level3"] == "Alternative")
+        merchant_id = self.db.upsert_canonical_merchant("SYNTHETIC SHOP", "synthetic")
+        self.db.upsert_merchant_alias(merchant_id, "SYNTHETIC", "contains", "synthetic")
+        self.db.upsert_merchant_category_rule(merchant_id, "expense", first_expense_category_id, "synthetic")
+
+        self.service.apply_merchant_review_rule("SYNTHETIC SHOP", "expense", replacement_category_id)
+
+        rules = [row for row in self.db.rule_rows() if row["canonical_merchant"] == "SYNTHETIC SHOP" and row["direction"] == "expense"]
+        self.assertEqual({replacement_category_id}, {row["category_id"] for row in rules})
+
+    def test_review_rule_only_backfills_eligible_group_rows(self):
+        ids = self._seed_review_rows([
+            ("SYNTHETIC SHOP", -1000, "unclassified", "", "cash"),
+            ("SYNTHETIC SHOP", -2000, "manual", "", "cash"),
+            ("SYNTHETIC SHOP", -3000, "unclassified", "internal_transfer", "cash"),
+            ("SYNTHETIC SHOP", -4000, "unclassified", "", "internal_transfer"),
+        ])
+        category_id = next(row["id"] for row in self.db.category_rows() if row["bucket"] == "expense")
+
+        self.assertEqual(1, self.service.merchant_review_impact("SYNTHETIC SHOP", "expense")["affected_count"])
+        self.service.apply_merchant_review_rule("SYNTHETIC SHOP", "expense", category_id)
+
+        rows = {row["amount_cents"]: row for row in self.db.transaction_rows()}
+        self.assertEqual("merchant_review_rule", rows[-1000]["category_reason"])
+        self.assertEqual("manual", rows[-2000]["category_status"])
+        self.assertEqual("unclassified", rows[-3000]["category_status"])
+        self.assertEqual("unclassified", rows[-4000]["category_status"])
+
     def test_db_transactions_layout_extracts_payment_details_merchant(self):
         transactions, warnings = parse_deutsche_bank_text(self._fixture_text("db_transactions_layout.txt"))
         self.assertFalse(warnings)

@@ -395,17 +395,91 @@ class Database:
 
     def merchant_review_group(self, merchant: str, direction: str) -> list[sqlite3.Row]:
         with self.connect() as con:
-            return con.execute(
-                """SELECT t.* FROM transactions t
-                LEFT JOIN merchant_review_progress p ON p.merchant=t.merchant
-                AND p.direction=CASE WHEN t.amount_cents < 0 THEN 'expense' ELSE 'income' END
-                WHERE t.merchant=? AND CASE WHEN t.amount_cents < 0 THEN 'expense' ELSE 'income' END=?
-                AND t.category_status='unclassified' AND t.excluded_reason=''
-                AND t.unsupported_currency=0 AND t.transaction_kind='cash' AND t.amount_cents != 0
-                AND p.merchant IS NULL
-                ORDER BY t.booking_date ASC, t.id ASC""",
-                (merchant, direction),
-            ).fetchall()
+            return self._merchant_review_group_rows(con, merchant, direction)
+
+    def merchant_review_impact(self, merchant: str, direction: str) -> dict:
+        with self.connect() as con:
+            rows = self._merchant_review_group_rows(con, merchant, direction)
+        return {
+            "merchant": merchant,
+            "direction": direction,
+            "affected_count": len(rows),
+            "date_from": min((row["booking_date"] for row in rows), default=""),
+            "date_to": max((row["booking_date"] for row in rows), default=""),
+            "account_count": len({row["account"] for row in rows}),
+        }
+
+    def apply_merchant_review_rule(self, merchant: str, direction: str, category_id: int) -> dict:
+        if direction not in ("income", "expense"):
+            raise ValueError("复核组方向必须是 income 或 expense。")
+        with self.connect() as con:
+            category = con.execute(
+                "SELECT id FROM categories WHERE id=? AND active=1 AND bucket=?", (category_id, direction)
+            ).fetchone()
+            if category is None:
+                raise ValueError("分类不存在或与收支方向不一致。")
+            rows = self._merchant_review_group_rows(con, merchant, direction)
+            if not rows:
+                raise ValueError("复核组已过期，请刷新页面。")
+
+            merchant_id = self._upsert_canonical_merchant(con, merchant, "merchant_review")
+            con.execute(
+                "INSERT OR IGNORE INTO merchant_aliases(canonical_merchant_id,pattern,match_kind,source) VALUES(?,?,?,?)",
+                (merchant_id, merchant, "exact", "merchant_review"),
+            )
+            con.execute(
+                "DELETE FROM merchant_category_rules WHERE canonical_merchant_id=? AND direction=?",
+                (merchant_id, direction),
+            )
+            con.execute(
+                "INSERT INTO merchant_category_rules(canonical_merchant_id,direction,category_id,source) VALUES(?,?,?,?)",
+                (merchant_id, direction, category_id, "merchant_review"),
+            )
+
+            updated_count = 0
+            for row in rows:
+                before = {key: row[key] for key in ("canonical_merchant_id", "category_id", "category_status", "category_reason")}
+                after = {
+                    "canonical_merchant_id": merchant_id,
+                    "category_id": category_id,
+                    "category_status": "classified",
+                    "category_reason": "merchant_review_rule",
+                }
+                updated = con.execute(
+                    """UPDATE transactions SET canonical_merchant_id=?, category_id=?, category_status=?, category_reason=?
+                    WHERE id=? AND merchant=? AND category_status='unclassified' AND excluded_reason=''
+                    AND unsupported_currency=0 AND transaction_kind='cash' AND amount_cents != 0
+                    AND CASE WHEN amount_cents < 0 THEN 'expense' ELSE 'income' END=?""",
+                    (merchant_id, category_id, "classified", "merchant_review_rule", row["id"], merchant, direction),
+                )
+                if updated.rowcount:
+                    con.execute(
+                        "INSERT INTO audit_log(transaction_id,action,before_json,after_json,note,created_at) VALUES(?,?,?,?,?,?)",
+                        (row["id"], "merchant_review_rule_applied", json.dumps(before), json.dumps(after), merchant, now()),
+                    )
+                    updated_count += 1
+            if not updated_count:
+                raise ValueError("复核组已过期，请刷新页面。")
+            con.execute(
+                """INSERT INTO merchant_review_progress(merchant,direction,status,updated_at) VALUES(?,?,?,?)
+                ON CONFLICT(merchant,direction) DO UPDATE SET status=excluded.status, updated_at=excluded.updated_at""",
+                (merchant, direction, "completed", now()),
+            )
+        return {"merchant": merchant, "direction": direction, "updated_count": updated_count}
+
+    @staticmethod
+    def _merchant_review_group_rows(con: sqlite3.Connection, merchant: str, direction: str) -> list[sqlite3.Row]:
+        return con.execute(
+            """SELECT t.* FROM transactions t
+            LEFT JOIN merchant_review_progress p ON p.merchant=t.merchant
+            AND p.direction=CASE WHEN t.amount_cents < 0 THEN 'expense' ELSE 'income' END
+            WHERE t.merchant=? AND CASE WHEN t.amount_cents < 0 THEN 'expense' ELSE 'income' END=?
+            AND t.category_status='unclassified' AND t.excluded_reason=''
+            AND t.unsupported_currency=0 AND t.transaction_kind='cash' AND t.amount_cents != 0
+            AND p.merchant IS NULL
+            ORDER BY t.booking_date ASC, t.id ASC""",
+            (merchant, direction),
+        ).fetchall()
 
     def skip_merchant_review_group(self, merchant: str, direction: str) -> None:
         with self.connect() as con:
