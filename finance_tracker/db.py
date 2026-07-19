@@ -13,7 +13,7 @@ from .categories import DEFAULT_CATEGORIES
 from .reconciliation import reconcile_paypal_rows
 
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 class Database:
@@ -103,6 +103,13 @@ class Database:
                     id INTEGER PRIMARY KEY, transaction_id INTEGER REFERENCES transactions(id), action TEXT NOT NULL,
                     before_json TEXT NOT NULL DEFAULT '{}', after_json TEXT NOT NULL DEFAULT '{}',
                     note TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS merchant_review_progress (
+                    merchant TEXT NOT NULL,
+                    direction TEXT NOT NULL CHECK(direction IN ('income','expense')),
+                    status TEXT NOT NULL CHECK(status IN ('skipped','completed')),
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY(merchant, direction)
                 );
                 CREATE INDEX IF NOT EXISTS idx_txn_date ON transactions(booking_date);
                 CREATE INDEX IF NOT EXISTS idx_txn_source ON transactions(source_file_id);
@@ -360,6 +367,53 @@ class Database:
                 ORDER BY t.booking_date DESC, t.id DESC""",
                 params,
             ).fetchall()
+
+    def merchant_review_groups(self) -> list[sqlite3.Row]:
+        with self.connect() as con:
+            return con.execute(
+                """WITH review_rows AS (
+                    SELECT t.*,
+                    CASE WHEN t.amount_cents < 0 THEN 'expense' ELSE 'income' END AS direction
+                    FROM transactions t
+                    WHERE t.category_status='unclassified' AND t.excluded_reason=''
+                    AND t.unsupported_currency=0 AND t.transaction_kind='cash' AND t.amount_cents != 0
+                )
+                SELECT r.merchant, r.direction, COUNT(*) AS transaction_count,
+                SUM(r.amount_cents) AS amount_cents, MIN(r.booking_date) AS date_from,
+                MAX(r.booking_date) AS date_to, COUNT(DISTINCT r.account) AS account_count,
+                MIN(r.category_reason) AS category_reason
+                FROM review_rows r
+                LEFT JOIN merchant_review_progress p ON p.merchant=r.merchant AND p.direction=r.direction
+                WHERE p.merchant IS NULL
+                GROUP BY r.merchant, r.direction
+                ORDER BY CASE
+                    WHEN LOWER(r.merchant)='unknown bank transaction' THEN 0
+                    WHEN MIN(r.category_reason) LIKE 'rule_conflict%' THEN 1
+                    ELSE 2
+                END, transaction_count DESC, r.merchant ASC"""
+            ).fetchall()
+
+    def merchant_review_group(self, merchant: str, direction: str) -> list[sqlite3.Row]:
+        with self.connect() as con:
+            return con.execute(
+                """SELECT t.* FROM transactions t
+                LEFT JOIN merchant_review_progress p ON p.merchant=t.merchant
+                AND p.direction=CASE WHEN t.amount_cents < 0 THEN 'expense' ELSE 'income' END
+                WHERE t.merchant=? AND CASE WHEN t.amount_cents < 0 THEN 'expense' ELSE 'income' END=?
+                AND t.category_status='unclassified' AND t.excluded_reason=''
+                AND t.unsupported_currency=0 AND t.transaction_kind='cash' AND t.amount_cents != 0
+                AND p.merchant IS NULL
+                ORDER BY t.booking_date ASC, t.id ASC""",
+                (merchant, direction),
+            ).fetchall()
+
+    def skip_merchant_review_group(self, merchant: str, direction: str) -> None:
+        with self.connect() as con:
+            con.execute(
+                """INSERT INTO merchant_review_progress(merchant,direction,status,updated_at) VALUES(?,?,?,?)
+                ON CONFLICT(merchant,direction) DO UPDATE SET status=excluded.status, updated_at=excluded.updated_at""",
+                (merchant, direction, "skipped", now()),
+            )
 
     def set_override(self, transaction_id: int, category_id: int, note: str) -> None:
         with self.connect() as con:

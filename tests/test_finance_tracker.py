@@ -135,6 +135,56 @@ class FinanceTrackerTests(unittest.TestCase):
         )
         self.db.write_import({"path": "", "filename": f"bank-paypal-{suffix}.pdf", "source_type": "deutsche_bank_pdf", "sha256": f"bank-paypal-{suffix}"}, [self.service._prepare(bank, "deutsche_bank_pdf")])
 
+    def _seed_review_rows(self, rows: list[tuple[str, int, str, str, str]]) -> list[int]:
+        prepared = []
+        for index, (merchant, amount_cents, category_status, excluded_reason, transaction_kind) in enumerate(rows):
+            transaction = ParsedTransaction(
+                booking_date=date(2026, 6, 1),
+                value_date=date(2026, 6, 1),
+                amount=Decimal(amount_cents) / 100,
+                currency="EUR",
+                merchant_raw=merchant,
+                merchant_normalized=merchant,
+                description_raw="Synthetic merchant review transaction",
+                account="ME",
+                source_format="synthetic",
+                source_record_index=index,
+                source_record_key=f"merchant-review:{index}",
+                raw={"synthetic": True, "index": index},
+            )
+            item = self.service._prepare(transaction, "synthetic")
+            item.update(
+                category_status=category_status,
+                category_reason="unclassified",
+                excluded_reason=excluded_reason,
+                transaction_kind=transaction_kind,
+            )
+            prepared.append(item)
+        self.db.write_import(
+            {"path": "", "filename": "merchant-review.csv", "source_type": "synthetic", "sha256": "merchant-review-seed"},
+            prepared,
+        )
+        return [row["id"] for row in self.db.transaction_rows()]
+
+    def test_merchant_review_groups_exclude_completed_and_non_spending_rows(self):
+        self._seed_review_rows([
+            ("SYNTHETIC SHOP", -1000, "unclassified", "", "cash"),
+            ("SYNTHETIC SHOP", -2000, "unclassified", "", "cash"),
+            ("Unknown bank transaction", -500, "unclassified", "", "cash"),
+            ("MANUAL SHOP", -700, "manual", "", "cash"),
+            ("TRANSFER", -100, "unclassified", "", "internal_transfer"),
+        ])
+
+        groups = [dict(row) for row in self.db.merchant_review_groups()]
+
+        self.assertEqual(["Unknown bank transaction", "SYNTHETIC SHOP"], [row["merchant"] for row in groups])
+        self.assertEqual(2, groups[1]["transaction_count"])
+        self.assertEqual(-3000, groups[1]["amount_cents"])
+        self.assertEqual(1, groups[1]["account_count"])
+        self.assertEqual(2, len(self.db.merchant_review_group("SYNTHETIC SHOP", "expense")))
+        self.db.skip_merchant_review_group("SYNTHETIC SHOP", "expense")
+        self.assertEqual(["Unknown bank transaction"], [row["merchant"] for row in self.db.merchant_review_groups()])
+
     def test_db_transactions_layout_extracts_payment_details_merchant(self):
         transactions, warnings = parse_deutsche_bank_text(self._fixture_text("db_transactions_layout.txt"))
         self.assertFalse(warnings)
