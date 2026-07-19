@@ -136,6 +136,7 @@ permanent application database.
 ## Encoding rules
 
 - Source, JSON, Markdown, TOML, and PowerShell files must remain UTF-8.
+- Every PowerShell script that invokes Python or captures Python text output must set `PYTHONUTF8=1` and `PYTHONIOENCODING=utf-8` itself; do not rely on virtual-environment activation, PowerShell profiles, the active code page, or global Windows locale settings.
 - Do not pipe Chinese, German, Markdown, JSON, or source code through PowerShell text-replacement one-liners.
 - Do not use `Out-File`, `Set-Content`, or `>` to rewrite source files unless encoding is explicitly controlled.
 - Prefer patch edits.
@@ -171,7 +172,12 @@ Before reporting completion, the agent must:
 - report unproven acceptance criteria, assumptions, limitations, and remaining risks
 - never claim completion while tests are failing
 - never weaken a test merely to obtain a passing result
-- never commit or push unless explicitly instructed
+
+## Automatic Issue Publication
+
+- After completing a GitHub Issue, passing all required verification, and completing self-review, automatically stage the intended changes, create one focused commit, push the current issue branch, and create or update a draft pull request.
+- Do not publish while tests are failing, verification is incomplete, the working tree contains unrelated changes, or financial-data privacy checks fail.
+- Each automatic publish must report the commit hash, branch, pull request URL, passed checks, and remaining product risks.
 
 ## Self-review requirements
 
@@ -187,3 +193,40 @@ The final response must clearly separate implementation completed, automated
 checks passed, self-review findings, confirmed defects fixed during self-review,
 assumptions, behavior not automatically verified, and items requiring
 product-owner judgment.
+
+## GitHub operations
+
+- Prefer the GitHub plugin/connector for remote GitHub operations when available.
+- Use the GitHub plugin for:
+  - pull request inspection and status
+  - review comments and review threads
+  - issues
+  - CI and workflow inspection
+  - repository metadata
+  - merge-status verification
+
+- Use local Git for:
+  - status and diff
+  - branch management
+  - commits
+  - fetch, pull, and push when Git authentication works
+
+- On Windows, `gh` executed inside the Codex sandbox may not have access to the host user's Windows Credential Manager credentials.
+- A sandbox-only `gh auth status` failure does not mean the user's GitHub account, host GitHub CLI session, or ChatGPT GitHub connector is disconnected.
+- Do not repeatedly run `gh auth login` in response to sandbox-only authentication failures.
+- Do not request Full Access solely to perform read-only GitHub operations when the GitHub plugin can perform them.
+- If the GitHub plugin cannot perform a required operation, request narrow approval for the specific CLI operation rather than Full Access for the entire task.
+
+## Agent skills
+
+### Issue tracker
+
+Issues and PRDs live in GitHub Issues for `jeremyzejunchen/finance-tracker`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Use `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, and `wontfix`. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+This is a single-context repository. Read `CONTEXT.md` and relevant `docs/adr/` before design or implementation work. See `docs/agents/domain.md`.

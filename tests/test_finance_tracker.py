@@ -8,13 +8,14 @@ from datetime import date
 from decimal import Decimal
 from pathlib import Path
 
-from finance_tracker.config import FinanceTrackerConfig
+from finance_tracker.config import FinanceTrackerConfig, default_config_path
 from finance_tracker.db import Database
 from finance_tracker.domain import ParsedTransaction
 from finance_tracker.domain import ImportPreview
 from finance_tracker.importers import parse_deutsche_bank_text, parse_paypal_csv, parse_trade_republic_csv
 from finance_tracker.importers.deutsche_bank import FALLBACK_WARNING, MERCHANT_WARNING, UNKNOWN_MERCHANT
 from finance_tracker.reconciliation.paypal import reconcile_paypal_rows
+from finance_tracker.runtime import migrate_legacy_runtime_data, project_runtime_paths
 from finance_tracker.services import FinanceService
 
 
@@ -828,6 +829,217 @@ class FinanceTrackerTests(unittest.TestCase):
         row = next(row for row in self.db.transaction_rows() if row["external_id"] == "PP-4")
         self.assertEqual("unclassified", row["category_status"])
         self.assertEqual("phase_1_default", row["category_reason"])
+
+    def test_merchant_coverage_excludes_non_spending_transactions_and_keeps_review_queue(self):
+        transactions = [
+            self._db_statement_transaction(merchant_raw="KAUFLAND", merchant_normalized="KAUFLAND", description_raw="", raw={}, amount=Decimal("-10.00")),
+            self._db_statement_transaction(merchant_raw="UNMATCHED SHOP", merchant_normalized="UNMATCHED SHOP", description_raw="", raw={}, amount=Decimal("-5.00")),
+            self._db_statement_transaction(merchant_raw="OWN ACCOUNT", merchant_normalized="OWN ACCOUNT", description_raw="", raw={}, amount=Decimal("-20.00"), is_internal_transfer=True),
+            self._db_statement_transaction(merchant_raw="PAYM.ORDER EXCHANGE", merchant_normalized="PAYM.ORDER EXCHANGE", description_raw="", raw={}, amount=Decimal("100.00"), transaction_kind="currency_exchange"),
+            self._db_statement_transaction(merchant_raw="FAILED SHOP", merchant_normalized="FAILED SHOP", description_raw="", raw={}, amount=Decimal("-7.00"), is_failed_transaction=True),
+            self._db_statement_transaction(merchant_raw="PAYM.ORDER REMITTANCE", merchant_normalized="PAYM.ORDER REMITTANCE", description_raw="", raw={}, amount=Decimal("100.00")),
+        ]
+        prepared = [self.service._prepare(item, "deutsche_bank_pdf") for item in transactions]
+        self.db.write_import({"path": "", "filename": "coverage.pdf", "source_type": "deutsche_bank_pdf", "sha256": "coverage-1"}, prepared)
+
+        coverage = self.service.merchant_coverage()
+
+        self.assertEqual(3, coverage["eligible_transactions"])
+        self.assertEqual(1, coverage["baseline_matched_transactions"])
+        self.assertEqual(2, coverage["pending_review_transactions"])
+        self.assertEqual(33.33, coverage["coverage_percent"])
+        self.assertEqual({"internal_transfer": 1, "currency_exchange": 1, "failed_transaction": 1}, coverage["excluded_by_reason"])
+
+    def test_historical_merchant_coverage_returns_aggregates_without_transaction_content(self):
+        historical_path = Path(self.directory.name) / "historical.json"
+        historical_path.write_text(json.dumps({"transactions": [
+            {"booking_date": "2026-01-01", "amount": "-10.00", "currency": "EUR", "merchant": "KAUFLAND"},
+            {"booking_date": "2026-01-02", "amount": "-5.00", "currency": "EUR", "merchant": "UNMATCHED SHOP"},
+            {"booking_date": "2026-01-03", "amount": "100.00", "currency": "EUR", "merchant": "PAYM.ORDER EXCHANGE"},
+            {"booking_date": "2026-01-04", "amount": "-1.00", "merchant": "KAUFLAND"},
+        ]}), encoding="utf-8")
+
+        coverage = self.service.historical_merchant_coverage(historical_path)
+
+        self.assertEqual(3, coverage["eligible_transactions"])
+        self.assertEqual(2, coverage["baseline_matched_transactions"])
+        self.assertEqual(1, coverage["pending_review_transactions"])
+        self.assertEqual("2026-01-01", coverage["date_from"])
+        self.assertEqual("2026-01-04", coverage["date_to"])
+        self.assertEqual({"EUR": -1600}, coverage["amount_cents_by_currency"])
+        self.assertEqual({"currency_exchange": 1}, coverage["excluded_by_reason"])
+        self.assertNotIn("merchant", json.dumps(coverage))
+
+    def test_project_runtime_paths_and_legacy_migration_deletes_verified_originals(self):
+        project_root = Path(self.directory.name) / "project"
+        legacy_root = Path(self.directory.name) / "legacy"
+        legacy_root.mkdir()
+        legacy_database = legacy_root / "finance_tracker.sqlite3"
+        legacy_config = legacy_root / "config.json"
+        legacy_database.write_bytes(b"synthetic sqlite bytes")
+        legacy_config.write_text('{"own_accounts": []}', encoding="utf-8")
+        expected_database = legacy_database.read_bytes()
+        expected_config = legacy_config.read_text(encoding="utf-8")
+
+        paths = project_runtime_paths(project_root)
+        result = migrate_legacy_runtime_data(paths, legacy_root, timestamp="20260719-120000")
+
+        self.assertEqual(project_root / "data" / "finance_tracker.sqlite3", paths.database_path)
+        self.assertEqual(project_root / "data" / "config.json", default_config_path(project_root))
+        self.assertEqual(expected_database, paths.database_path.read_bytes())
+        self.assertEqual(expected_config, paths.config_path.read_text(encoding="utf-8"))
+        self.assertTrue((project_root / "exports" / "backups" / "migrations" / "20260719-120000" / "finance_tracker.sqlite3").is_file())
+        self.assertTrue((project_root / "exports" / "backups" / "migrations" / "20260719-120000" / "config.json").is_file())
+        self.assertFalse(legacy_database.exists())
+        self.assertFalse(legacy_config.exists())
+        self.assertEqual(["config.json", "finance_tracker.sqlite3"], result["copied"])
+        self.assertEqual([], migrate_legacy_runtime_data(paths, legacy_root, timestamp="20260719-120001")["copied"])
+
+    def test_merchant_rule_rows_persist_canonical_merchant_alias_and_direction(self):
+        category_id = self.db.category_rows()[0]["id"]
+
+        merchant_id = self.db.upsert_canonical_merchant("SYNTHETIC MARKET", "test")
+        self.db.upsert_merchant_alias(merchant_id, "SYNTHETIC MARKET", "exact", "test")
+        self.db.upsert_merchant_category_rule(merchant_id, "expense", category_id, "test")
+
+        rule = self.db.rule_rows()[0]
+        self.assertEqual("SYNTHETIC MARKET", rule["canonical_merchant"])
+        self.assertEqual("exact", rule["match_kind"])
+        self.assertEqual("expense", rule["direction"])
+        self.assertEqual(category_id, rule["category_id"])
+
+    def test_existing_database_schema_upgrade_creates_project_backup(self):
+        project_root = Path(self.directory.name) / "project"
+        database_path = project_root / "data" / "finance_tracker.sqlite3"
+        database_path.parent.mkdir(parents=True)
+        import sqlite3
+        con = sqlite3.connect(database_path)
+        try:
+            con.execute("CREATE TABLE transactions (id INTEGER PRIMARY KEY, booking_date TEXT, source_file_id INTEGER, category_id INTEGER)")
+            con.commit()
+        finally:
+            con.close()
+
+        database = Database(database_path)
+        database.initialize()
+
+        backups = list((project_root / "exports" / "backups" / "schema").glob("*-canonical-merchant.sqlite3"))
+        self.assertEqual(1, len(backups))
+        con = sqlite3.connect(backups[0])
+        try:
+            self.assertNotIn("canonical_merchant_id", [row[1] for row in con.execute("PRAGMA table_info(transactions)")])
+            self.assertNotIn("category_status", [row[1] for row in con.execute("PRAGMA table_info(transactions)")])
+        finally:
+            con.close()
+        con = sqlite3.connect(database_path)
+        try:
+            self.assertIn("canonical_merchant_id", [row[1] for row in con.execute("PRAGMA table_info(transactions)")])
+            self.assertIn("category_status", [row[1] for row in con.execute("PRAGMA table_info(transactions)")])
+        finally:
+            con.close()
+
+    def test_merchant_resolver_prefers_exact_alias_over_contains_alias(self):
+        from finance_tracker.merchant_rules import MerchantResolver, MerchantRule
+
+        resolver = MerchantResolver([
+            MerchantRule("GENERAL SHOP", "SHOP", "contains", "expense", 1),
+            MerchantRule("EXACT SHOP", "SHOP 42", "exact", "expense", 2),
+        ])
+
+        resolution = resolver.resolve("SHOP 42", -1000, "unclassified", "cash", "")
+
+        self.assertEqual("EXACT SHOP", resolution.canonical_merchant)
+        self.assertEqual(2, resolution.category_id)
+        self.assertEqual("rule_exact", resolution.category_reason)
+
+    def test_merchant_resolver_keeps_direction_mismatch_conflict_and_manual_unclassified(self):
+        from finance_tracker.merchant_rules import MerchantResolver, MerchantRule
+
+        resolver = MerchantResolver([
+            MerchantRule("EXPENSE SHOP", "SHOP", "contains", "expense", 1),
+            MerchantRule("SECOND SHOP", "SHOP", "contains", "expense", 2),
+        ])
+
+        income = resolver.resolve("SHOP", 1000, "unclassified", "cash", "")
+        conflict = resolver.resolve("SHOP", -1000, "unclassified", "cash", "")
+        manual = resolver.resolve("SHOP", -1000, "manual", "cash", "")
+
+        self.assertEqual("unclassified", income.category_status)
+        self.assertEqual("rule_conflict_contains", conflict.category_reason)
+        self.assertEqual("manual", manual.category_status)
+
+    def test_preview_and_confirmation_share_merchant_rule_resolution(self):
+        category_id = self.db.category_rows()[0]["id"]
+        merchant_id = self.db.upsert_canonical_merchant("SYNTHETIC MARKET", "test")
+        self.db.upsert_merchant_alias(merchant_id, "SYNTHETIC MARKET", "exact", "test")
+        self.db.upsert_merchant_category_rule(merchant_id, "expense", category_id, "test")
+        transaction = self._db_statement_transaction(
+            merchant_raw="SYNTHETIC MARKET",
+            merchant_normalized="SYNTHETIC MARKET",
+            description_raw="",
+            raw={},
+            amount=Decimal("-10.00"),
+        )
+        preview = self._synthetic_preview("synthetic.pdf", "deutsche_bank_pdf", [transaction], token="rule-preview")
+        original_preview = self.service.preview
+        self.service.preview = lambda filename, content, source_path="": preview
+        try:
+            preview_rows = self.service.preview_many([{"filename": "synthetic.pdf", "content": b"synthetic"}])["transactions"]
+        finally:
+            self.service.preview = original_preview
+
+        self.service.previews[preview.token] = preview
+        self.service.confirm("rule-preview")
+        stored = self.db.transaction_rows()[0]
+        self.assertEqual("SYNTHETIC MARKET", preview_rows[0]["canonical_merchant"])
+        self.assertEqual(preview_rows[0]["category_reason"], stored["category_reason"])
+        self.assertEqual(category_id, stored["category_id"])
+
+    def test_legacy_baseline_import_backfills_once_and_preserves_manual_override(self):
+        baseline_path = Path(self.directory.name) / "legacy-categories.md"
+        baseline_path.write_text(
+            "## 活动支出\n\n| 子类 | 关键字/商户 | 说明 |\n|------|-----------|------|\n| 合成超市 | SYNTHETIC MARKET | test |\n",
+            encoding="utf-8",
+        )
+        first = self._db_statement_transaction(merchant_raw="SYNTHETIC MARKET", merchant_normalized="SYNTHETIC MARKET", description_raw="", raw={}, amount=Decimal("-10.00"))
+        second = self._db_statement_transaction(merchant_raw="SYNTHETIC MARKET", merchant_normalized="SYNTHETIC MARKET", description_raw="manual", raw={}, amount=Decimal("-20.00"), external_id="manual-row")
+        prepared = [self.service._prepare(item, "deutsche_bank_pdf") for item in (first, second)]
+        self.db.write_import({"path": "", "filename": "synthetic.pdf", "source_type": "deutsche_bank_pdf", "sha256": "legacy-baseline-seed"}, prepared)
+        manual_category_id = self.db.category_rows()[0]["id"]
+        manual_transaction_id = self.db.transaction_rows()[0]["id"]
+        self.db.set_override(manual_transaction_id, manual_category_id, "synthetic override")
+
+        first_result = self.service.import_legacy_baseline_rules(baseline_path)
+        second_result = self.service.import_legacy_baseline_rules(baseline_path)
+
+        rows = self.db.transaction_rows()
+        backfilled = next(row for row in rows if row["merchant"] == "SYNTHETIC MARKET" and row["category_status"] != "manual")
+        manual = next(row for row in rows if row["category_status"] == "manual")
+        self.assertEqual(1, first_result["rules_created"])
+        self.assertEqual(1, first_result["transactions_updated"])
+        self.assertEqual(0, second_result["rules_created"])
+        self.assertEqual(0, second_result["transactions_updated"])
+        self.assertEqual("合成超市", backfilled["level3"])
+        self.assertEqual("legacy_baseline_rule", backfilled["category_reason"])
+        self.assertEqual("manual", manual["category_status"])
+        self.assertEqual(1, self.db.audit_count("merchant_rule_backfill"))
+
+    def test_legacy_migration_keeps_originals_when_project_data_already_exists(self):
+        project_root = Path(self.directory.name) / "project"
+        legacy_root = Path(self.directory.name) / "legacy"
+        legacy_root.mkdir()
+        legacy_database = legacy_root / "finance_tracker.sqlite3"
+        legacy_database.write_bytes(b"synthetic legacy sqlite bytes")
+        paths = project_runtime_paths(project_root)
+        paths.data_dir.mkdir(parents=True)
+        paths.database_path.write_bytes(b"existing project sqlite bytes")
+
+        result = migrate_legacy_runtime_data(paths, legacy_root)
+
+        self.assertEqual([], result["copied"])
+        self.assertEqual(["finance_tracker.sqlite3"], result["skipped"])
+        self.assertTrue(legacy_database.is_file())
+        self.assertEqual(b"existing project sqlite bytes", paths.database_path.read_bytes())
 
     def test_currency_exchange_is_written_with_excluded_reason(self):
         transaction = self._db_statement_transaction()

@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .runtime import project_runtime_paths
 
-def default_config_path() -> Path:
-    base = Path(os.environ.get("LOCALAPPDATA", str(Path.home())))
-    return base / "FinanceTracker" / "config.json"
+
+def default_config_path(root: Path | None = None) -> Path:
+    return project_runtime_paths(root).config_path
 
 
 @dataclass(slots=True)
