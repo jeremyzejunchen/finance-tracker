@@ -18,14 +18,16 @@ ROOT = Path(__file__).resolve().parent
 STATIC = ROOT / "static"
 
 
-def build_server(host: str, port: int, database_path: Path) -> ThreadingHTTPServer:
+def build_server(host: str, port: int, database_path: Path, statement_root: Path | None = None) -> ThreadingHTTPServer:
     database = Database(database_path)
     database.initialize()
     service = FinanceService(database)
+    resolved_statement_root = (statement_root or Path(__file__).resolve().parent.parent / "银行流水").resolve()
 
     class Handler(AppHandler):
         db = database
         finance = service
+        statement_root = resolved_statement_root
 
     return ThreadingHTTPServer((host, port), Handler)
 
@@ -48,6 +50,8 @@ class AppHandler(BaseHTTPRequestHandler):
             return self.json_response([dict(row) for row in self.db.category_rows()])
         if path == "/api/rules":
             return self.json_response([dict(row) for row in self.db.rule_rows()])
+        if path == "/api/import/scan":
+            return self.json_response({"files": self.finance.scan_statement_directory(self.statement_root)})
         if path in ("/", "/import", "/transactions", "/review", "/categories"):
             return self.html_response(render_page(path))
         self.send_error(HTTPStatus.NOT_FOUND)
@@ -61,6 +65,9 @@ class AppHandler(BaseHTTPRequestHandler):
                 if not uploads:
                     raise ImportErrorForUser("请选择账单文件。")
                 return self.json_response(self.finance.preview_many(uploads))
+            if path == "/api/import/preview-scanned":
+                body = self.json_body()
+                return self.json_response(self.finance.preview_scanned_files(list(body.get("relative_paths", [])), self.statement_root))
             if path == "/api/import/confirm":
                 body = self.json_body()
                 return self.json_response(self.finance.confirm_many(body["items"]))

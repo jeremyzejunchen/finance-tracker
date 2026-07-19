@@ -375,54 +375,57 @@ async function importPage() {
         <label>来源路径（可选，仅用于审计）<input name="source_path" placeholder="例如 D:\\Statements"></label>
         <button>解析并预览</button>
       </form>
+      <button id="scan-directory" type="button">扫描银行流水目录</button>
+      <section id="scan-results" class="hidden"></section>
     </section>
     <section id="preview" class="panel hidden"></section>
   </div>`;
+  const target = document.querySelector("#preview");
+  const renderPreview = (data, sourcePaths = {}, source = "") => {
+    target.classList.remove("hidden");
+    const state = buildPreviewState(data);
+    state.renderedCount = state.chunkSize;
+    renderImportPreview(target, state);
+    const checkbox = document.querySelector("#confirm-check");
+    const button = document.querySelector("#confirm");
+    if (!checkbox || !button) return;
+    const updateConfirmation = () => {
+      const current = confirmationState(data, checkbox.checked);
+      checkbox.disabled = current.checkboxDisabled;
+      button.disabled = current.buttonDisabled;
+    };
+    updateConfirmation();
+    checkbox.onchange = updateConfirmation;
+    button.onclick = async () => {
+      const result = await request("/api/import/confirm", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ items: data.previews.map(item => ({ token: item.token, source_path: sourcePaths[item.token] || (source ? `${source}\\${item.filename}` : "") })) }),
+      });
+      target.insertAdjacentHTML("beforeend", `<section class="panel">${result.results.map((item, index) => item.ok ? `<p class="notice">${escapeHtml(data.previews[index].filename)}：写入 ${item.inserted || 0} 笔${item.duplicate_source ? "（重复来源，已跳过）" : ""}。</p>` : `<p class="warning">${escapeHtml(data.previews[index].filename)}：${escapeHtml(item.error)}</p>`).join("")}</section>`);
+      button.disabled = true;
+    };
+  };
   document.querySelector("#import-form").onsubmit = async event => {
     event.preventDefault();
     const form = new FormData(event.target);
-    const target = document.querySelector("#preview");
     try {
       const data = await request("/api/import/preview", { method: "POST", body: form });
-      target.classList.remove("hidden");
-      const state = buildPreviewState(data);
-      state.renderedCount = state.chunkSize;
-      renderImportPreview(target, state);
-      const source = form.get("source_path");
-      const bindConfirm = () => {
-        const checkbox = document.querySelector("#confirm-check");
-        const button = document.querySelector("#confirm");
-        if (!checkbox || !button) return;
-        const stateForConfirmation = () => confirmationState(data, checkbox.checked);
-        const updateConfirmation = () => {
-          const current = stateForConfirmation();
-          checkbox.disabled = current.checkboxDisabled;
-          button.disabled = current.buttonDisabled;
-        };
-        updateConfirmation();
-        checkbox.onchange = () => {
-          updateConfirmation();
-        };
-        button.onclick = async () => {
-          const result = await request("/api/import/confirm", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              items: data.previews.map(item => ({
-                token: item.token,
-                source_path: source ? `${source}\\${item.filename}` : "",
-              })),
-            }),
-          });
-          target.insertAdjacentHTML("beforeend", `<section class="panel">${result.results.map((item, index) => item.ok ? `<p class="notice">${escapeHtml(data.previews[index].filename)}：写入 ${item.inserted || 0} 笔${item.duplicate_source ? "（重复来源，已跳过）" : ""}。</p>` : `<p class="warning">${escapeHtml(data.previews[index].filename)}：${escapeHtml(item.error)}</p>`).join("")}</section>`);
-          button.disabled = true;
-        };
-      };
-      bindConfirm();
+      renderPreview(data, {}, form.get("source_path"));
     } catch (error) {
       target.classList.remove("hidden");
       target.innerHTML = `<p class="warning">${escapeHtml(error.message)}</p>`;
     }
+  };
+  document.querySelector("#scan-directory").onclick = async () => {
+    const scan = await request("/api/import/scan");
+    const holder = document.querySelector("#scan-results");
+    holder.classList.remove("hidden");
+    holder.innerHTML = `${scan.files.map(file => `<label><input type="checkbox" value="${escapeHtml(file.relative_path)}" ${file.status === "ready" ? "" : "disabled"}>${escapeHtml(file.relative_path)} · ${escapeHtml(file.account)} · ${escapeHtml(file.status)}</label>`).join("<br>")}<button id="preview-scanned" type="button">预览所选文件</button>`;
+    document.querySelector("#preview-scanned").onclick = async () => {
+      const relative_paths = [...holder.querySelectorAll("input:checked")].map(input => input.value);
+      const data = await request("/api/import/preview-scanned", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ relative_paths }) });
+      renderPreview(data, data.source_paths);
+    };
   };
 }
 

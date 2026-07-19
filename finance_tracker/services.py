@@ -14,6 +14,7 @@ from .domain import ImportPreview, ParsedTransaction
 from .importers import ImportErrorForUser, parse_file
 from .merchant_coverage import build_merchant_coverage, load_merchant_baseline
 from .merchant_rules import MerchantResolver, MerchantRule
+from .statement_directory import StatementDirectoryScanner
 from .reconciliation import fingerprint_for_transaction, mark_internal_transfers, mark_refund_pairs
 
 
@@ -23,8 +24,11 @@ class FinanceService:
         self.config = config or load_config()
         self.previews: dict[str, ImportPreview] = {}
 
-    def preview(self, filename: str, content: bytes, source_path: str = "") -> ImportPreview:
+    def preview(self, filename: str, content: bytes, source_path: str = "", account_override: str = "") -> ImportPreview:
         source_type, transactions, warnings = parse_file(filename, content, self.config)
+        if account_override in {"ME", "WIFE"}:
+            for transaction in transactions:
+                transaction.account = account_override
         sha256 = hashlib.sha256(content).hexdigest()
         aggregated_warnings = list(warnings)
         for item in transactions:
@@ -58,7 +62,11 @@ class FinanceService:
                 "duplicate_source": self.db.source_exists(file_hash),
             })
             try:
-                preview = self.preview(upload["filename"], upload["content"])
+                account_override = str(upload.get("account_override", ""))
+                if account_override:
+                    preview = self.preview(upload["filename"], upload["content"], str(upload.get("source_path", "")), account_override)
+                else:
+                    preview = self.preview(upload["filename"], upload["content"], str(upload.get("source_path", "")))
                 source_files[-1].update({
                     "source_type": preview.source_type,
                     "file_hash": preview.file_hash,
@@ -109,6 +117,32 @@ class FinanceService:
             "baseline": baseline,
             "audit": audit,
         }
+
+    def scan_statement_directory(self, root: Path) -> list[dict]:
+        return [
+            {"relative_path": item.relative_path, "account": item.account, "status": item.status}
+            for item in StatementDirectoryScanner(root, self.db.source_exists).scan()
+        ]
+
+    def preview_scanned_files(self, relative_paths: list[str], root: Path) -> dict:
+        root = root.resolve()
+        available = {item.relative_path: item for item in StatementDirectoryScanner(root, self.db.source_exists).scan()}
+        files = []
+        for relative_path in relative_paths:
+            item = available.get(relative_path)
+            if item is None:
+                raise ValueError("所选账单不在扫描目录中。")
+            if item.status == "already_imported":
+                raise ValueError("所选账单已经导入。")
+            if item.status != "ready":
+                raise ValueError("所选 CSV 尚未确认账户归属。")
+            path = (root / item.relative_path).resolve()
+            if not path.is_relative_to(root):
+                raise ValueError("所选账单路径无效。")
+            files.append({"filename": path.name, "content": path.read_bytes(), "source_path": str(path), "account_override": item.account})
+        result = self.preview_many(files)
+        result["source_paths"] = {preview["token"]: files[index]["source_path"] for index, preview in enumerate(result["previews"])}
+        return result
 
     @staticmethod
     def _baseline_difference(previews: list[dict]) -> dict:
