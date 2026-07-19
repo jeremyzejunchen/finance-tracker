@@ -207,7 +207,7 @@ class FinanceTrackerTests(unittest.TestCase):
         self.assertEqual(-3000, groups[1]["amount_cents"])
         self.assertEqual(1, groups[1]["account_count"])
         self.assertEqual(2, len(self.db.merchant_review_group("SYNTHETIC SHOP", "expense")))
-        self.db.skip_merchant_review_group("SYNTHETIC SHOP", "expense")
+        self.service.skip_merchant_review_group("SYNTHETIC SHOP", "expense")
         self.assertEqual([UNKNOWN_MERCHANT], [row["merchant"] for row in self.db.merchant_review_groups()])
 
     def test_review_rule_backfills_group_and_preserves_manual_override(self):

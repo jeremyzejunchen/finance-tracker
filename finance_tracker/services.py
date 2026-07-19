@@ -30,6 +30,9 @@ class FinanceService:
     def apply_merchant_review_rule(self, merchant: str, direction: str, category_id: int) -> dict:
         return self.db.apply_merchant_review_rule(merchant, direction, category_id)
 
+    def skip_merchant_review_group(self, merchant: str, direction: str) -> None:
+        self.db.skip_merchant_review_group(merchant, direction)
+
     def preview(self, filename: str, content: bytes, source_path: str = "", account_override: str = "") -> ImportPreview:
         source_type, transactions, warnings = parse_file(filename, content, self.config)
         if account_override in {"ME", "WIFE"}:

@@ -107,7 +107,7 @@ class AppHandler(BaseHTTPRequestHandler):
                 ))
             if path == "/api/merchant-review/skip":
                 body = self.json_body()
-                self.db.skip_merchant_review_group(str(body["merchant"]), str(body["direction"]))
+                self.finance.skip_merchant_review_group(str(body["merchant"]), str(body["direction"]))
                 return self.json_response({"ok": True})
             if path == "/api/merchant-review/override":
                 body = self.json_body()
