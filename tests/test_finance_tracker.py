@@ -3,10 +3,13 @@ from __future__ import annotations
 import json
 import hashlib
 import tempfile
+import threading
 import unittest
 from datetime import date
 from decimal import Decimal
+from http.client import HTTPConnection
 from pathlib import Path
+from urllib.parse import urlencode
 
 from finance_tracker.config import FinanceTrackerConfig, default_config_path
 from finance_tracker.db import Database
@@ -27,7 +30,8 @@ class FinanceTrackerTests(unittest.TestCase):
 
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
-        self.db = Database(Path(self.directory.name) / "finance.sqlite3")
+        self.database_path = Path(self.directory.name) / "finance.sqlite3"
+        self.db = Database(self.database_path)
         self.db.initialize()
         self.config = FinanceTrackerConfig(
             own_accounts=[
@@ -166,6 +170,27 @@ class FinanceTrackerTests(unittest.TestCase):
         )
         return [row["id"] for row in self.db.transaction_rows()]
 
+    def _json_request(self, method: str, path: str, body: dict | None = None, expected_status: int = 200):
+        from finance_tracker.app import build_server
+
+        server = build_server("127.0.0.1", 0, self.database_path)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            content = json.dumps(body).encode("utf-8") if body is not None else None
+            connection = HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+            headers = {"Content-Type": "application/json; charset=utf-8"} if content is not None else {}
+            connection.request(method, path, body=content, headers=headers)
+            response = connection.getresponse()
+            payload = json.loads(response.read().decode("utf-8"))
+            connection.close()
+            self.assertEqual(expected_status, response.status, payload)
+            return payload
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+
     def test_merchant_review_groups_exclude_completed_and_non_spending_rows(self):
         self._seed_review_rows([
             ("SYNTHETIC SHOP", -1000, "unclassified", "", "cash"),
@@ -242,6 +267,49 @@ class FinanceTrackerTests(unittest.TestCase):
         self.assertEqual("manual", rows[-2000]["category_status"])
         self.assertEqual("unclassified", rows[-3000]["category_status"])
         self.assertEqual("unclassified", rows[-4000]["category_status"])
+
+    def test_merchant_review_http_api(self):
+        from finance_tracker.app import render_page
+
+        self.assertIn('data-page="/merchant-review"', render_page("/merchant-review"))
+        self.assertIn("商户复核", render_page("/merchant-review"))
+        self._seed_review_rows([
+            ("SYNTHETIC SHOP", -1000, "unclassified", "", "cash"),
+            ("SYNTHETIC SHOP", -2000, "unclassified", "", "cash"),
+            ("SECOND SYNTHETIC SHOP", -3000, "unclassified", "", "cash"),
+        ])
+        transaction_id = next(row["id"] for row in self.db.transaction_rows() if row["merchant"] == "SYNTHETIC SHOP")
+        expense_id = next(row["id"] for row in self.db.category_rows() if row["bucket"] == "expense")
+        query = urlencode({"merchant": "SYNTHETIC SHOP", "direction": "expense"})
+
+        groups = self._json_request("GET", "/api/merchant-review/groups")
+        self.assertIn("SYNTHETIC SHOP", [group["merchant"] for group in groups])
+        impact = self._json_request("GET", f"/api/merchant-review/impact?{query}")
+        self.assertEqual(2, impact["affected_count"])
+        details = self._json_request("GET", f"/api/merchant-review/group?{query}")
+        self.assertEqual({"id", "booking_date", "amount_cents", "account", "category_id"}, set(details[0]))
+        self.assertNotIn("description_raw", details[0])
+
+        self._json_request("POST", "/api/merchant-review/override", {
+            "transaction_id": transaction_id, "category_id": expense_id,
+        })
+        self.assertEqual("manual", next(row for row in self.db.transaction_rows() if row["id"] == transaction_id)["category_status"])
+        self._json_request("POST", "/api/merchant-review/skip", {
+            "merchant": "SYNTHETIC SHOP", "direction": "expense",
+        })
+        self.assertEqual(["SECOND SYNTHETIC SHOP"], [
+            group["merchant"] for group in self._json_request("GET", "/api/merchant-review/groups")
+        ])
+        applied = self._json_request("POST", "/api/merchant-review/apply", {
+            "merchant": "SECOND SYNTHETIC SHOP", "direction": "expense", "category_id": expense_id,
+        })
+        self.assertEqual(1, applied["updated_count"])
+        error = self._json_request("POST", "/api/merchant-review/apply", {
+            "merchant": "SYNTHETIC SHOP", "direction": "expense", "category_id": expense_id,
+        }, expected_status=400)
+        self.assertIn("过期", error["error"])
+        invalid = self._json_request("GET", "/api/merchant-review/impact?merchant=SYNTHETIC%20SHOP&direction=other", expected_status=400)
+        self.assertIn("方向", invalid["error"])
 
     def test_db_transactions_layout_extracts_payment_details_merchant(self):
         transactions, warnings = parse_deutsche_bank_text(self._fixture_text("db_transactions_layout.txt"))
