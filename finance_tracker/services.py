@@ -12,6 +12,8 @@ from .audit import AuditTransaction, build_audit
 from .db import Database
 from .domain import ImportPreview, ParsedTransaction
 from .importers import ImportErrorForUser, parse_file
+from .merchant_coverage import build_merchant_coverage, load_merchant_baseline
+from .merchant_rules import MerchantResolver, MerchantRule
 from .reconciliation import fingerprint_for_transaction, mark_internal_transfers, mark_refund_pairs
 
 
@@ -235,15 +237,28 @@ class FinanceService:
             "category_id": category_id,
             "category_status": category_status,
             "category_reason": category_reason,
+            "canonical_merchant_id": None,
             "excluded_reason": excluded_reason,
             "unsupported_currency": int(item.currency.upper() != "EUR"),
         }
+        resolution = self._merchant_resolver().resolve(
+            data["merchant"], data["amount_cents"], data["category_status"], data["transaction_kind"], data["excluded_reason"],
+        )
+        if resolution.canonical_merchant_id is not None:
+            data["canonical_merchant_id"] = resolution.canonical_merchant_id
+            data["canonical_merchant"] = resolution.canonical_merchant
+            data["category_id"] = resolution.category_id
+            data["category_status"] = resolution.category_status
+            data["category_reason"] = resolution.category_reason
         data["fingerprint"] = fingerprint_for_transaction(source_type, data)
         return data
 
     def _preview_rows(self, preview: ImportPreview) -> list[dict]:
         rows = preview.details()
         for row, item in zip(rows, preview.transactions):
+            prepared = self._prepare(item, preview.source_type)
+            row.update({key: prepared[key] for key in ("canonical_merchant_id", "category_id", "category_status", "category_reason")})
+            row["canonical_merchant"] = prepared.get("canonical_merchant", "")
             transaction_kind = item.transaction_kind
             if transaction_kind in ("", "cash"):
                 transaction_kind = self._currency_exchange_kind(item, preview.source_type) or transaction_kind
@@ -251,6 +266,18 @@ class FinanceService:
             if transaction_kind == "currency_exchange":
                 row["is_internal_transfer"] = False
         return rows
+
+    def _merchant_resolver(self) -> MerchantResolver:
+        return MerchantResolver([
+            MerchantRule(
+                row["canonical_merchant"], row["pattern"], row["match_kind"], row["direction"], row["category_id"], row["canonical_merchant_id"],
+            )
+            for row in self.db.active_rules()
+        ])
+
+    def import_legacy_baseline_rules(self, path: Path | None = None) -> dict[str, int]:
+        baseline_path = path or Path(__file__).resolve().parent.parent / "legacy" / "categories.md"
+        return self.db.import_legacy_baseline_rules(load_merchant_baseline(baseline_path))
 
     def _currency_exchange_kind(self, item: ParsedTransaction, source_type: str) -> str:
         text = "\n".join(
@@ -288,3 +315,27 @@ class FinanceService:
             "monthly": [{"month": key, "income": value[0], "expense": -value[1]} for key, value in sorted(monthly.items())],
             "categories": [{"name": key, "amount": value} for key, value in sorted(categories.items(), key=lambda pair: pair[1], reverse=True)],
         }
+
+    def merchant_coverage(self) -> dict:
+        return build_merchant_coverage(self._coverage_rows(), self._merchant_baseline_rules())
+
+    def historical_merchant_coverage(self, path: Path | None = None) -> dict:
+        historical_path = path or Path(__file__).resolve().parent.parent / "bank_transactions.json"
+        data = json.loads(historical_path.read_text(encoding="utf-8"))
+        rows = data if isinstance(data, list) else data.get("transactions", [])
+        if not isinstance(rows, list):
+            raise ValueError("Historical transaction data must contain a transaction list.")
+        return build_merchant_coverage(
+            rows,
+            self._merchant_baseline_rules(),
+            infer_legacy_currency_exchange=True,
+            missing_currency="EUR",
+        )
+
+    def _coverage_rows(self) -> list[dict]:
+        return [dict(row) for row in self.db.transaction_rows()]
+
+    @staticmethod
+    def _merchant_baseline_rules():
+        path = Path(__file__).resolve().parent.parent / "legacy" / "categories.md"
+        return load_merchant_baseline(path)

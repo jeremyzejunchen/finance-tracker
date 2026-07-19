@@ -5,6 +5,9 @@ if ($PSVersionTable.PSVersion.Major -lt 7) {
     exit 1
 }
 
+$env:PYTHONUTF8 = "1"
+$env:PYTHONIOENCODING = "utf-8"
+
 function Fail([string]$Message) {
     Write-Error $Message
     exit 1
@@ -41,6 +44,16 @@ Assert-Path (Join-Path $repoRoot "tests") "tests directory"
 
 $venvPython = Join-Path $repoRoot ".venv-phase1\Scripts\python.exe"
 Assert-Path $venvPython "Virtual environment Python"
+
+$unicodeSentinel = & $venvPython -c "import sys; sys.stdout.write('\u9879\u76ee')"
+if ($LASTEXITCODE -ne 0) {
+    Fail "Unable to verify Python UTF-8 output"
+}
+
+$expectedUnicodeSentinel = [string]::Concat([char]0x9879, [char]0x76EE)
+if ($unicodeSentinel -cne $expectedUnicodeSentinel) {
+    Fail "Python UTF-8 output check failed"
+}
 
 $pythonInfo = & $venvPython -c "import sys; print(sys.executable); print(sys.version); print(sys.prefix); print(sys.base_prefix)"
 if ($LASTEXITCODE -ne 0) {

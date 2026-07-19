@@ -10,6 +10,9 @@ if ($PSVersionTable.PSVersion.Major -lt 7) {
     exit 1
 }
 
+$env:PYTHONUTF8 = "1"
+$env:PYTHONIOENCODING = "utf-8"
+
 function Fail([string]$Message) {
     Write-Error $Message
     exit 1

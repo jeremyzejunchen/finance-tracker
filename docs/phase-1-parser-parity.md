@@ -17,7 +17,7 @@ Status legend:
 | 4. Amount and date parsing | Legacy helpers | `finance_tracker.importers.common` | 完整实现 | Shared parser handles German and English formats. |
 | 5. Header/footer and Previous balance filtering | Inline rules | DB layout parsers | 完整实现 | Unknown PDF fallback now emits warning instead of silently replacing dedicated logic. |
 | 6. PayPal English and German CSV | Supported | `finance_tracker.importers.paypal` | 完整实现 | Both column variants covered by fixtures. |
-| 7. PayPal account ownership detection | Email and filename heuristics | Local config driven mapping | 有意改变行为 | Moved to `%LOCALAPPDATA%\FinanceTracker\config.json`; no private email hardcoding in repo. Covered by tests. |
+| 7. PayPal account ownership detection | Email and filename heuristics | Local config driven mapping | 有意改变行为 | Stored in ignored `data\config.json`; no private email hardcoding in repo. Covered by tests. |
 | 8. PayPal to bank debit matching | Legacy heuristic | `finance_tracker.reconciliation.paypal` | 部分实现 | Automatic match requires a single candidate; ambiguous matches stay suggested and do not auto-exclude either bank row. |
 | 9. PayPal income and withdrawal matching | Legacy heuristic | `finance_tracker.reconciliation.paypal` | 部分实现 | Audit model exists, but real multi-candidate income/withdrawal coverage is still limited in anonymous fixtures. |
 | 10. PayPal partial balance payment | Legacy balance-aware handling | Separate PayPal rows retained with reconciliation support | 部分实现 | Legacy balance inference for partial-balance payments is still not restored. |
@@ -44,6 +44,6 @@ Known phase-1 gaps that remain open:
 
 Sensitive data policy:
 
-- Local owned-account and PayPal-account mapping must come from `%LOCALAPPDATA%\FinanceTracker\config.json`.
+- Local owned-account and PayPal-account mapping must come from ignored `data\config.json`.
 - Repository only ships `config.example.json` with fictional values.
 - Real IBANs were previously present in git history; PR notes should recommend `git filter-repo` or equivalent history rewrite before any public release.

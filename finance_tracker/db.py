@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import sqlite3
+import shutil
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -11,7 +13,7 @@ from .categories import DEFAULT_CATEGORIES
 from .reconciliation import reconcile_paypal_rows
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 class Database:
@@ -34,6 +36,8 @@ class Database:
             con.close()
 
     def initialize(self) -> None:
+        if self._needs_transaction_columns():
+            self._backup_before_schema_change()
         with self.connect() as con:
             con.executescript(
                 """
@@ -54,6 +58,20 @@ class Database:
                     active INTEGER NOT NULL DEFAULT 1,
                     UNIQUE(level1, level2, level3)
                 );
+                CREATE TABLE IF NOT EXISTS canonical_merchants (
+                    id INTEGER PRIMARY KEY, name TEXT NOT NULL UNIQUE, source TEXT NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS merchant_aliases (
+                    id INTEGER PRIMARY KEY, canonical_merchant_id INTEGER NOT NULL REFERENCES canonical_merchants(id),
+                    pattern TEXT NOT NULL, match_kind TEXT NOT NULL CHECK(match_kind IN ('exact','contains')),
+                    source TEXT NOT NULL, UNIQUE(canonical_merchant_id, pattern, match_kind, source)
+                );
+                CREATE TABLE IF NOT EXISTS merchant_category_rules (
+                    id INTEGER PRIMARY KEY, canonical_merchant_id INTEGER NOT NULL REFERENCES canonical_merchants(id),
+                    direction TEXT NOT NULL CHECK(direction IN ('income','expense')),
+                    category_id INTEGER NOT NULL REFERENCES categories(id), source TEXT NOT NULL,
+                    UNIQUE(canonical_merchant_id, direction, category_id, source)
+                );
                 CREATE TABLE IF NOT EXISTS transactions (
                     id INTEGER PRIMARY KEY, source_file_id INTEGER NOT NULL REFERENCES source_files(id),
                     booking_date TEXT NOT NULL, value_date TEXT NOT NULL DEFAULT '',
@@ -67,6 +85,7 @@ class Database:
                     fingerprint TEXT NOT NULL UNIQUE, category_id INTEGER REFERENCES categories(id),
                     category_status TEXT NOT NULL DEFAULT 'unclassified',
                     category_reason TEXT NOT NULL DEFAULT 'unclassified',
+                    canonical_merchant_id INTEGER REFERENCES canonical_merchants(id),
                     excluded_reason TEXT NOT NULL DEFAULT '', unsupported_currency INTEGER NOT NULL DEFAULT 0,
                     created_at TEXT NOT NULL
                 );
@@ -90,6 +109,13 @@ class Database:
                 CREATE INDEX IF NOT EXISTS idx_txn_category ON transactions(category_id);
                 """
             )
+            missing_columns = {
+                "category_status": "TEXT NOT NULL DEFAULT 'unclassified'",
+                "canonical_merchant_id": "INTEGER REFERENCES canonical_merchants(id)",
+            }
+            for column, definition in missing_columns.items():
+                if not self._has_column(con, "transactions", column):
+                    con.execute(f"ALTER TABLE transactions ADD COLUMN {column} {definition}")
             con.execute("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (?, ?)", (SCHEMA_VERSION, now()))
             for level1, level2, level3, bucket in DEFAULT_CATEGORIES:
                 con.execute("INSERT OR IGNORE INTO categories(level1,level2,level3,bucket) VALUES(?,?,?,?)", (level1, level2, level3, bucket))
@@ -107,10 +133,157 @@ class Database:
             con.execute("INSERT INTO categories(level1,level2,level3,bucket) VALUES(?,?,?,?)", (level1.strip(), level2.strip(), level3.strip(), bucket))
 
     def active_rules(self) -> list[sqlite3.Row]:
-        return []
+        return self.rule_rows()
 
     def rule_rows(self) -> list[sqlite3.Row]:
-        return []
+        with self.connect() as con:
+            return con.execute(
+                """SELECT r.id AS rule_id, m.id AS canonical_merchant_id, m.name AS canonical_merchant,
+                a.id AS alias_id, a.pattern, a.match_kind, r.direction, r.category_id,
+                r.source AS rule_source, a.source AS alias_source
+                FROM merchant_category_rules r
+                JOIN canonical_merchants m ON m.id=r.canonical_merchant_id
+                JOIN merchant_aliases a ON a.canonical_merchant_id=m.id
+                ORDER BY r.id, a.id"""
+            ).fetchall()
+
+    def upsert_canonical_merchant(self, name: str, source: str) -> int:
+        with self.connect() as con:
+            return self._upsert_canonical_merchant(con, name, source)
+
+    def upsert_merchant_alias(self, canonical_merchant_id: int, pattern: str, match_kind: str, source: str) -> int:
+        if match_kind not in ("exact", "contains"):
+            raise ValueError("商户别名匹配方式必须是 exact 或 contains。")
+        with self.connect() as con:
+            con.execute(
+                "INSERT OR IGNORE INTO merchant_aliases(canonical_merchant_id,pattern,match_kind,source) VALUES(?,?,?,?)",
+                (canonical_merchant_id, pattern.strip(), match_kind, source),
+            )
+            return con.execute(
+                "SELECT id FROM merchant_aliases WHERE canonical_merchant_id=? AND pattern=? AND match_kind=? AND source=?",
+                (canonical_merchant_id, pattern.strip(), match_kind, source),
+            ).fetchone()["id"]
+
+    def upsert_merchant_category_rule(self, canonical_merchant_id: int, direction: str, category_id: int, source: str) -> int:
+        if direction not in ("income", "expense"):
+            raise ValueError("商户分类规则方向必须是 income 或 expense。")
+        with self.connect() as con:
+            con.execute(
+                "INSERT OR IGNORE INTO merchant_category_rules(canonical_merchant_id,direction,category_id,source) VALUES(?,?,?,?)",
+                (canonical_merchant_id, direction, category_id, source),
+            )
+            return con.execute(
+                "SELECT id FROM merchant_category_rules WHERE canonical_merchant_id=? AND direction=? AND category_id=? AND source=?",
+                (canonical_merchant_id, direction, category_id, source),
+            ).fetchone()["id"]
+
+    def import_legacy_baseline_rules(self, rules: list[object]) -> dict[str, int]:
+        from .merchant_rules import MerchantResolver, MerchantRule
+
+        rules_created = transactions_updated = conflicts = 0
+        with self.connect() as con:
+            for baseline in rules:
+                direction = baseline.direction
+                level1 = "收入" if direction == "income" else "支出"
+                con.execute(
+                    "INSERT OR IGNORE INTO categories(level1,level2,level3,bucket) VALUES(?,?,?,?)",
+                    (level1, baseline.category, baseline.category, direction),
+                )
+                category_id = con.execute(
+                    "SELECT id FROM categories WHERE level1=? AND level2=? AND level3=?",
+                    (level1, baseline.category, baseline.category),
+                ).fetchone()["id"]
+                merchant_id = self._upsert_canonical_merchant(con, baseline.keyword, "legacy_baseline")
+                con.execute(
+                    "INSERT OR IGNORE INTO merchant_aliases(canonical_merchant_id,pattern,match_kind,source) VALUES(?,?,?,?)",
+                    (merchant_id, baseline.keyword, "contains", "legacy_baseline"),
+                )
+                result = con.execute(
+                    "INSERT OR IGNORE INTO merchant_category_rules(canonical_merchant_id,direction,category_id,source) VALUES(?,?,?,?)",
+                    (merchant_id, direction, category_id, "legacy_baseline"),
+                )
+                rules_created += result.rowcount
+
+            rule_rows = con.execute(
+                """SELECT m.id AS canonical_merchant_id, m.name AS canonical_merchant, a.pattern, a.match_kind,
+                r.direction, r.category_id FROM merchant_category_rules r
+                JOIN canonical_merchants m ON m.id=r.canonical_merchant_id
+                JOIN merchant_aliases a ON a.canonical_merchant_id=m.id"""
+            ).fetchall()
+            resolver = MerchantResolver([
+                MerchantRule(row["canonical_merchant"], row["pattern"], row["match_kind"], row["direction"], row["category_id"], row["canonical_merchant_id"])
+                for row in rule_rows
+            ])
+            transactions = con.execute(
+                """SELECT * FROM transactions WHERE category_status='unclassified' AND transaction_kind='cash'
+                AND excluded_reason='' AND amount_cents != 0"""
+            ).fetchall()
+            for transaction in transactions:
+                resolution = resolver.resolve(transaction["merchant"], transaction["amount_cents"], transaction["category_status"], transaction["transaction_kind"], transaction["excluded_reason"])
+                if resolution.category_reason.startswith("rule_conflict_"):
+                    conflicts += 1
+                    continue
+                if resolution.canonical_merchant_id is None:
+                    continue
+                before = {key: transaction[key] for key in ("canonical_merchant_id", "category_id", "category_status", "category_reason")}
+                after = {
+                    "canonical_merchant_id": resolution.canonical_merchant_id,
+                    "category_id": resolution.category_id,
+                    "category_status": resolution.category_status,
+                    "category_reason": "legacy_baseline_rule",
+                }
+                con.execute(
+                    "UPDATE transactions SET canonical_merchant_id=?, category_id=?, category_status=?, category_reason=? WHERE id=?",
+                    (resolution.canonical_merchant_id, resolution.category_id, resolution.category_status, "legacy_baseline_rule", transaction["id"]),
+                )
+                con.execute(
+                    "INSERT INTO audit_log(transaction_id,action,before_json,after_json,note,created_at) VALUES(?,?,?,?,?,?)",
+                    (transaction["id"], "merchant_rule_backfill", json.dumps(before), json.dumps(after), "legacy_baseline", now()),
+                )
+                transactions_updated += 1
+        return {"rules_created": rules_created, "transactions_updated": transactions_updated, "conflicts": conflicts}
+
+    def audit_count(self, action: str) -> int:
+        with self.connect() as con:
+            return con.execute("SELECT COUNT(*) FROM audit_log WHERE action=?", (action,)).fetchone()[0]
+
+    def _upsert_canonical_merchant(self, con: sqlite3.Connection, name: str, source: str) -> int:
+        con.execute("INSERT OR IGNORE INTO canonical_merchants(name,source) VALUES(?,?)", (name.strip(), source))
+        return con.execute("SELECT id FROM canonical_merchants WHERE name=?", (name.strip(),)).fetchone()["id"]
+
+    def _needs_transaction_columns(self) -> bool:
+        if not self.path.is_file() or self.path.stat().st_size == 0:
+            return False
+        con = sqlite3.connect(self.path)
+        try:
+            return self._has_column(con, "transactions", "id") and any(
+                not self._has_column(con, "transactions", column)
+                for column in ("category_status", "canonical_merchant_id")
+            )
+        finally:
+            con.close()
+
+    def _backup_before_schema_change(self) -> Path:
+        backups = self.path.parent.parent / "exports" / "backups" / "schema"
+        backups.mkdir(parents=True, exist_ok=True)
+        target = backups / f"{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}-canonical-merchant.sqlite3"
+        shutil.copy2(self.path, target)
+        if self._sha256(self.path) != self._sha256(target):
+            target.unlink(missing_ok=True)
+            raise RuntimeError("数据库结构迁移备份校验失败。")
+        return target
+
+    @staticmethod
+    def _has_column(con: sqlite3.Connection, table: str, column: str) -> bool:
+        return any(row[1] == column for row in con.execute(f"PRAGMA table_info({table})"))
+
+    @staticmethod
+    def _sha256(path: Path) -> str:
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
 
     def add_rule(self, pattern: str, category_id: int, priority: int = 100) -> None:
         raise ValueError("第一阶段不启用自动分类规则。")
@@ -144,15 +317,15 @@ class Database:
                         """INSERT INTO transactions(
                         source_file_id,booking_date,value_date,amount_cents,currency,merchant_raw,merchant,description,account,external_id,
                         transaction_kind,transaction_type,source_format,source_record_index,source_record_key,is_internal_transfer,
-                        is_failed_transaction,raw_json,fingerprint,category_id,category_status,category_reason,excluded_reason,unsupported_currency,created_at)
-                        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                        is_failed_transaction,raw_json,fingerprint,category_id,category_status,category_reason,canonical_merchant_id,excluded_reason,unsupported_currency,created_at)
+                        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                         (
                             source_id, item["booking_date"], item["value_date"], item["amount_cents"], item["currency"],
                             item["merchant_raw"], item["merchant"], item["description"], item["account"], item["external_id"],
                             item["transaction_kind"], item["transaction_type"], item["source_format"], item["source_record_index"],
                             item["source_record_key"], item["is_internal_transfer"], item["is_failed_transaction"],
                             json.dumps(item["raw"], ensure_ascii=False), item["fingerprint"], item["category_id"],
-                            item["category_status"], item["category_reason"], item["excluded_reason"], item["unsupported_currency"], now(),
+                            item["category_status"], item["category_reason"], item.get("canonical_merchant_id"), item["excluded_reason"], item["unsupported_currency"], now(),
                         ),
                     )
                     inserted += 1
@@ -180,8 +353,9 @@ class Database:
         clause = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         with self.connect() as con:
             return con.execute(
-                f"""SELECT t.*, c.level1, c.level2, c.level3, c.bucket, s.filename, s.source_type
+                f"""SELECT t.*, c.level1, c.level2, c.level3, c.bucket, cm.name AS canonical_merchant, s.filename, s.source_type
                 FROM transactions t LEFT JOIN categories c ON c.id=t.category_id
+                LEFT JOIN canonical_merchants cm ON cm.id=t.canonical_merchant_id
                 JOIN source_files s ON s.id=t.source_file_id {clause}
                 ORDER BY t.booking_date DESC, t.id DESC""",
                 params,
