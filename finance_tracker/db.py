@@ -387,7 +387,7 @@ class Database:
                 WHERE p.merchant IS NULL
                 GROUP BY r.merchant, r.direction
                 ORDER BY CASE
-                    WHEN LOWER(r.merchant)='unknown bank transaction' THEN 0
+                    WHEN LOWER(r.merchant) LIKE 'unknown %' THEN 0
                     WHEN MIN(r.category_reason) LIKE 'rule_conflict%' THEN 1
                     ELSE 2
                 END, transaction_count DESC, r.merchant ASC"""

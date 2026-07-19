@@ -170,20 +170,20 @@ class FinanceTrackerTests(unittest.TestCase):
         self._seed_review_rows([
             ("SYNTHETIC SHOP", -1000, "unclassified", "", "cash"),
             ("SYNTHETIC SHOP", -2000, "unclassified", "", "cash"),
-            ("Unknown bank transaction", -500, "unclassified", "", "cash"),
+            (UNKNOWN_MERCHANT, -500, "unclassified", "", "cash"),
             ("MANUAL SHOP", -700, "manual", "", "cash"),
             ("TRANSFER", -100, "unclassified", "", "internal_transfer"),
         ])
 
         groups = [dict(row) for row in self.db.merchant_review_groups()]
 
-        self.assertEqual(["Unknown bank transaction", "SYNTHETIC SHOP"], [row["merchant"] for row in groups])
+        self.assertEqual([UNKNOWN_MERCHANT, "SYNTHETIC SHOP"], [row["merchant"] for row in groups])
         self.assertEqual(2, groups[1]["transaction_count"])
         self.assertEqual(-3000, groups[1]["amount_cents"])
         self.assertEqual(1, groups[1]["account_count"])
         self.assertEqual(2, len(self.db.merchant_review_group("SYNTHETIC SHOP", "expense")))
         self.db.skip_merchant_review_group("SYNTHETIC SHOP", "expense")
-        self.assertEqual(["Unknown bank transaction"], [row["merchant"] for row in self.db.merchant_review_groups()])
+        self.assertEqual([UNKNOWN_MERCHANT], [row["merchant"] for row in self.db.merchant_review_groups()])
 
     def test_db_transactions_layout_extracts_payment_details_merchant(self):
         transactions, warnings = parse_deutsche_bank_text(self._fixture_text("db_transactions_layout.txt"))
