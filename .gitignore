@@ -1,5 +1,4 @@
-银行流水/*.pdf
-银行流水/*.csv
+银行流水/**
 记账导出数据/*.csv
 bank_transactions.json
 bank_summary_2025.html

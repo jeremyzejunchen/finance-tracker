@@ -1041,11 +1041,26 @@ class FinanceTrackerTests(unittest.TestCase):
         rows = StatementDirectoryScanner(root, self.db.source_exists).scan()
 
         by_path = {row.relative_path: row for row in rows}
-        self.assertEqual("ME", by_path["main.pdf"].account)
+        self.assertNotIn("main.pdf", by_path)
         self.assertEqual("ME", by_path["nested/joint-czj.csv"].account)
         self.assertEqual("WIFE", by_path["nested/joint-cr.csv"].account)
         self.assertEqual("already_imported", by_path["nested/joint-cr.csv"].status)
         self.assertEqual("needs_account_selection", by_path["unknown.csv"].status)
+
+    def test_statement_directory_scan_ignores_pdf_and_preserves_csv_account_suffixes(self):
+        from finance_tracker.statement_directory import StatementDirectoryScanner
+
+        root = Path(self.directory.name) / "银行流水"
+        root.mkdir()
+        (root / "old.pdf").write_bytes(b"synthetic-pdf")
+        (root / "bank-czj.csv").write_bytes(b"synthetic-czj")
+        (root / "bank-cr.csv").write_bytes(b"synthetic-cr")
+
+        rows = {row.relative_path: row for row in StatementDirectoryScanner(root, self.db.source_exists).scan()}
+
+        self.assertNotIn("old.pdf", rows)
+        self.assertEqual("ME", rows["bank-czj.csv"].account)
+        self.assertEqual("WIFE", rows["bank-cr.csv"].account)
 
     def test_preview_scanned_file_uses_inferred_account(self):
         root = Path(self.directory.name) / "银行流水"
