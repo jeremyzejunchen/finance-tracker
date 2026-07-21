@@ -29,6 +29,15 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+
+      - name: Install pinned browser test runner
+        shell: pwsh
+        run: npm ci
+
       - name: Display environment
         shell: pwsh
         run: |

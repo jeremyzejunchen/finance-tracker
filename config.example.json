@@ -24,7 +24,7 @@
   "currency_exchange_rules": [
     {
       "name": "Example FX remittance",
-      "source_types": ["deutsche_bank_pdf"],
+      "source_types": ["kontoumsaetze_csv"],
       "contains_all": ["STRUCTURAL_MARKER_A", "STRUCTURAL_MARKER_B"]
     }
   ]

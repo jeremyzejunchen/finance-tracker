@@ -1,5 +1,4 @@
-银行流水/*.pdf
-银行流水/*.csv
+银行流水/**
 记账导出数据/*.csv
 bank_transactions.json
 bank_summary_2025.html
@@ -11,6 +10,7 @@ __pycache__/
 *.egg-info/
 .claude/
 .playwright-mcp/
+.playwright-cli/
 .venv-phase1/
 .tmp/
 .superpowers/
@@ -22,3 +22,4 @@ data/config.json
 data/uploads/
 exports/
 .pytest_cache/
+node_modules/

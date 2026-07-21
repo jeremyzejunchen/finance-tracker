@@ -7,6 +7,9 @@ from pathlib import Path
 from .runtime import project_runtime_paths
 
 
+LEGACY_FX_SOURCE_TYPES = {"deutsche_bank_pdf": "kontoumsaetze_csv"}
+
+
 def default_config_path(root: Path | None = None) -> Path:
     return project_runtime_paths(root).config_path
 
@@ -42,7 +45,11 @@ class FinanceTrackerConfig:
     def currency_exchange_kind_for(self, source_type: str, text: str) -> str:
         candidate = text.lower()
         for rule in self.currency_exchange_rules:
-            source_types = [str(value).strip() for value in rule.get("source_types", []) if str(value).strip()]
+            source_types = [
+                LEGACY_FX_SOURCE_TYPES.get(str(value).strip(), str(value).strip())
+                for value in rule.get("source_types", [])
+                if str(value).strip()
+            ]
             if source_types and source_type not in source_types:
                 continue
             contains_all = [str(value).strip().lower() for value in rule.get("contains_all", []) if str(value).strip()]

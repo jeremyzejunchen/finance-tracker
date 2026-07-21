@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import sqlite3
 import tempfile
 import threading
 import unittest
@@ -15,9 +16,7 @@ from finance_tracker.config import FinanceTrackerConfig, default_config_path
 from finance_tracker.db import Database
 from finance_tracker.domain import ParsedTransaction
 from finance_tracker.domain import ImportPreview
-from finance_tracker.importers import parse_deutsche_bank_text, parse_paypal_csv, parse_trade_republic_csv
-from finance_tracker.importers.deutsche_bank import FALLBACK_WARNING, MERCHANT_WARNING, UNKNOWN_MERCHANT
-from finance_tracker.reconciliation.paypal import reconcile_paypal_rows
+from finance_tracker.importers import ImportErrorForUser, parse_file, parse_paypal_csv, parse_trade_republic_csv
 from finance_tracker.runtime import migrate_legacy_runtime_data, project_runtime_paths
 from finance_tracker.services import FinanceService
 
@@ -30,8 +29,7 @@ class FinanceTrackerTests(unittest.TestCase):
 
     def setUp(self):
         self.directory = tempfile.TemporaryDirectory()
-        self.database_path = Path(self.directory.name) / "finance.sqlite3"
-        self.db = Database(self.database_path)
+        self.db = Database(Path(self.directory.name) / "finance.sqlite3")
         self.db.initialize()
         self.config = FinanceTrackerConfig(
             own_accounts=[
@@ -45,7 +43,7 @@ class FinanceTrackerTests(unittest.TestCase):
             currency_exchange_rules=[
                 {
                     "name": "Example FX remittance",
-                    "source_types": ["deutsche_bank_pdf"],
+                    "source_types": ["kontoumsaetze_csv"],
                     "contains_all": ["fx marker a", "fx marker b"],
                 }
             ],
@@ -76,11 +74,6 @@ class FinanceTrackerTests(unittest.TestCase):
             transactions, overrides.pop("warnings", []), overrides.pop("duplicate_source", False),
             parser_warnings=overrides.pop("parser_warnings", []),
         )
-
-    def _import_db_text(self, filename: str, fixture_name: str) -> None:
-        transactions, _warnings = parse_deutsche_bank_text(self._fixture_text(fixture_name))
-        prepared = [self.service._prepare(item, "deutsche_bank_pdf") for item in transactions]
-        self.db.write_import({"path": "", "filename": filename, "source_type": "deutsche_bank_pdf", "sha256": filename}, prepared)
 
     def _db_statement_transaction(self, **overrides) -> ParsedTransaction:
         values = {
@@ -121,47 +114,20 @@ class FinanceTrackerTests(unittest.TestCase):
             for row in rows
         ]
 
-    def _insert_bank_paypal(self, suffix: str, merchant: str = "PayPal Europe", amount: Decimal = Decimal("-12.50")):
-        reference_tx = parse_deutsche_bank_text(self._fixture_text("db_transactions_layout.txt"))[0][0]
-        bank = ParsedTransaction(
-            booking_date=reference_tx.booking_date,
-            value_date=reference_tx.booking_date,
-            amount=amount,
-            currency="EUR",
-            merchant_raw=merchant,
-            merchant_normalized=merchant,
-            description_raw="SEPA direct debit PayPal",
-            account="Deutsche Bank",
-            source_format="db_transactions",
-            source_record_index=0,
-            source_record_key=f"paypal-bank-{suffix}",
-            raw={"kind": "bank_paypal", "suffix": suffix},
-        )
-        self.db.write_import({"path": "", "filename": f"bank-paypal-{suffix}.pdf", "source_type": "deutsche_bank_pdf", "sha256": f"bank-paypal-{suffix}"}, [self.service._prepare(bank, "deutsche_bank_pdf")])
-
     def _seed_review_rows(self, rows: list[tuple[str, int, str, str, str]]) -> list[int]:
         prepared = []
         for index, (merchant, amount_cents, category_status, excluded_reason, transaction_kind) in enumerate(rows):
             transaction = ParsedTransaction(
-                booking_date=date(2026, 6, 1),
-                value_date=date(2026, 6, 1),
-                amount=Decimal(amount_cents) / 100,
-                currency="EUR",
-                merchant_raw=merchant,
-                merchant_normalized=merchant,
-                description_raw="Synthetic merchant review transaction",
-                account="ME",
-                source_format="synthetic",
-                source_record_index=index,
-                source_record_key=f"merchant-review:{index}",
-                raw={"synthetic": True, "index": index},
+                booking_date=date(2026, 6, 1), value_date=date(2026, 6, 1),
+                amount=Decimal(amount_cents) / 100, currency="EUR", merchant_raw=merchant,
+                merchant_normalized=merchant, description_raw="Synthetic merchant review transaction",
+                account="ME", source_format="synthetic", source_record_index=index,
+                source_record_key=f"merchant-review:{index}", raw={"synthetic": True, "index": index},
             )
             item = self.service._prepare(transaction, "synthetic")
             item.update(
-                category_status=category_status,
-                category_reason="unclassified",
-                excluded_reason=excluded_reason,
-                transaction_kind=transaction_kind,
+                category_status=category_status, category_reason="unclassified",
+                excluded_reason=excluded_reason, transaction_kind=transaction_kind,
             )
             prepared.append(item)
         self.db.write_import(
@@ -173,7 +139,7 @@ class FinanceTrackerTests(unittest.TestCase):
     def _json_request(self, method: str, path: str, body: dict | None = None, expected_status: int = 200):
         from finance_tracker.app import build_server
 
-        server = build_server("127.0.0.1", 0, self.database_path)
+        server = build_server("127.0.0.1", 0, self.db.path)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         try:
@@ -195,20 +161,20 @@ class FinanceTrackerTests(unittest.TestCase):
         self._seed_review_rows([
             ("SYNTHETIC SHOP", -1000, "unclassified", "", "cash"),
             ("SYNTHETIC SHOP", -2000, "unclassified", "", "cash"),
-            (UNKNOWN_MERCHANT, -500, "unclassified", "", "cash"),
+            ("UNKNOWN MERCHANT", -500, "unclassified", "", "cash"),
             ("MANUAL SHOP", -700, "manual", "", "cash"),
             ("TRANSFER", -100, "unclassified", "", "internal_transfer"),
         ])
 
         groups = [dict(row) for row in self.db.merchant_review_groups()]
 
-        self.assertEqual([UNKNOWN_MERCHANT, "SYNTHETIC SHOP"], [row["merchant"] for row in groups])
+        self.assertEqual(["UNKNOWN MERCHANT", "SYNTHETIC SHOP"], [row["merchant"] for row in groups])
         self.assertEqual(2, groups[1]["transaction_count"])
         self.assertEqual(-3000, groups[1]["amount_cents"])
         self.assertEqual(1, groups[1]["account_count"])
         self.assertEqual(2, len(self.db.merchant_review_group("SYNTHETIC SHOP", "expense")))
         self.service.skip_merchant_review_group("SYNTHETIC SHOP", "expense")
-        self.assertEqual([UNKNOWN_MERCHANT], [row["merchant"] for row in self.db.merchant_review_groups()])
+        self.assertEqual(["UNKNOWN MERCHANT"], [row["merchant"] for row in self.db.merchant_review_groups()])
 
     def test_review_rule_backfills_group_and_preserves_manual_override(self):
         ids = self._seed_review_rows([
@@ -311,185 +277,6 @@ class FinanceTrackerTests(unittest.TestCase):
         invalid = self._json_request("GET", "/api/merchant-review/impact?merchant=SYNTHETIC%20SHOP&direction=other", expected_status=400)
         self.assertIn("方向", invalid["error"])
 
-    def test_db_transactions_layout_extracts_payment_details_merchant(self):
-        transactions, warnings = parse_deutsche_bank_text(self._fixture_text("db_transactions_layout.txt"))
-        self.assertFalse(warnings)
-        self.assertEqual(3, len(transactions))
-        self.assertEqual("EXAMPLE MARKET", transactions[0].merchant_normalized)
-        self.assertEqual("SECOND SHOP", transactions[2].merchant_normalized)
-        self.assertEqual("Debit Card Payment", transactions[0].transaction_type)
-
-    def test_db_account_statement_skips_previous_balance_and_reads_split_dates(self):
-        transactions, warnings = parse_deutsche_bank_text(self._fixture_text("db_account_statement_layout.txt"))
-        self.assertFalse(warnings)
-        self.assertEqual(3, len(transactions))
-        self.assertEqual("2026-06-06", transactions[0].booking_date.isoformat())
-        self.assertEqual("-10.00", str(transactions[0].amount))
-        self.assertNotIn("Previous balance", transactions[0].merchant_raw)
-
-    def test_db_statement_marks_internal_and_failed_transactions(self):
-        transactions, _warnings = parse_deutsche_bank_text(self._fixture_text("db_account_statement_layout.txt"))
-        self.assertFalse(transactions[1].is_internal_transfer)
-        self.assertTrue(transactions[2].is_failed_transaction)
-
-    def test_db_account_statement_extracts_retailers_and_warns_for_placeholder(self):
-        transactions, warnings = parse_deutsche_bank_text(self._fixture_text("db_account_statement_merchants.txt"))
-        self.assertFalse(warnings)
-        self.assertEqual([
-            ("Tegut Filiale 2714", "TEGUT"),
-            ("KAUFLAND GOETTINGEN IN", "KAUFLAND"),
-            ("GO ASIA DEUTSCHLAND", "GO ASIA"),
-            ("dm-drogerie markt", "dm-drogerie markt"),
-            ("LIDL", "LIDL"),
-            ("ALDI SÜD", "ALDI"),
-        ], [(item.merchant_raw, item.merchant_normalized) for item in transactions[:6]])
-        self.assertEqual(UNKNOWN_MERCHANT, transactions[6].merchant_raw)
-        self.assertEqual(UNKNOWN_MERCHANT, transactions[6].merchant_normalized)
-        self.assertEqual([MERCHANT_WARNING], transactions[6].warnings)
-
-    def test_db_account_statement_keeps_valid_counterparties(self):
-        transactions, _warnings = parse_deutsche_bank_text(self._fixture_text("db_account_statement_layout.txt"))
-        self.assertEqual("COFFEE SHOP BERLIN", transactions[0].merchant_raw)
-        self.assertEqual("PAYM.ORDER JOHN DOE", transactions[1].merchant_raw)
-        self.assertEqual("FAILED MERCHANT", transactions[2].merchant_raw)
-
-    def test_db_account_statement_retailer_patterns_override_processors(self):
-        text = "\n".join([
-            "Account statement",
-            "- 1,00", "SEPA Lastschrifteinzug von PAYPAL", "Payment Reference/E2E-Ref. ABC Einkauf bei dm-drogerie markt", "01-01-", "2026", "01-01-", "2026", "Reference",
-            "- 2,00", "SEPA Lastschrifteinzug von Verifone Payments GmbH", "Payment Reference/E2E-Ref. DEF Einkauf bei dm-drogerie markt", "02-01-", "2026", "02-01-", "2026", "Reference",
-            "- 3,00", "SEPA Lastschrifteinzug von S. Digits Payment GmbH", "LIDL sagt Danke für Ihren Einkauf", "03-01-", "2026", "03-01-", "2026", "Reference",
-            "- 4,00", "SEPA Lastschrifteinzug von Utility Provider GmbH", "Acme Company mention only", "04-01-", "2026", "04-01-", "2026", "Reference",
-            "- 5,00", "SEPA Lastschrifteinzug von Subscription Provider GmbH", "Malformed // text", "05-01-", "2026", "05-01-", "2026", "Reference",
-            "- 6,00", "Kartenzahlung", "KAUFLAND GOETTINGEN IN//GOETTINGEN/DE 24-10-2025T00:00:00 Karten", "06-01-", "2026", "06-01-", "2026", "Reference",
-        ])
-        transactions, _warnings = parse_deutsche_bank_text(text)
-        self.assertEqual("dm-drogerie markt", transactions[0].merchant_raw)
-        self.assertEqual("dm-drogerie markt", transactions[0].merchant_normalized)
-        self.assertEqual("dm-drogerie markt", transactions[1].merchant_raw)
-        self.assertEqual("LIDL", transactions[2].merchant_raw)
-        self.assertEqual("Utility Provider GmbH", transactions[3].merchant_raw)
-        self.assertEqual("Subscription Provider GmbH", transactions[4].merchant_raw)
-        self.assertEqual("KAUFLAND GOETTINGEN IN", transactions[5].merchant_raw)
-        self.assertEqual("KAUFLAND", transactions[5].merchant_normalized)
-
-    def test_db_account_statement_rejects_generic_multiline_card_candidates(self):
-        text = "\n".join([
-            "Account statement",
-            "- 1,00", "SEPA Lastschrifteinzug von Example Utility GmbH", "Payment Reference/E2E-Ref.//GOETTINGEN/DE", "01-01-2026T00:00:00 Karten", "01-01-", "2026", "01-01-", "2026", "Reference",
-            "- 2,00", "Kartenzahlung", "  payment reference/e2e-ref.  //GOETTINGEN/DE", "02-01-2026T00:00:00 Karten", "02-01-", "2026", "02-01-", "2026", "Reference",
-            "- 3,00", "Kartenzahlung", "KAUFLAND GOETTINGEN IN//GOETTINGEN/DE", "03-01-2026T00:00:00 Karten", "03-01-", "2026", "03-01-", "2026", "Reference",
-            "- 4,00", "Kartenzahlung", "Tegut Filiale 2714//GOETTINGEN/DE", "04-01-2026T00:00:00 Karten", "04-01-", "2026", "04-01-", "2026", "Reference",
-            "- 5,00", "Kartenzahlung", "GO ASIA DEUTSCHLAND//GOETTINGEN/DE", "05-01-2026T00:00:00 Karten", "05-01-", "2026", "05-01-", "2026", "Reference",
-        ])
-        transactions, _warnings = parse_deutsche_bank_text(text)
-        self.assertEqual("Example Utility GmbH", transactions[0].merchant_raw)
-        self.assertEqual(UNKNOWN_MERCHANT, transactions[1].merchant_raw)
-        self.assertEqual([MERCHANT_WARNING], transactions[1].warnings)
-        self.assertEqual(("KAUFLAND GOETTINGEN IN", "KAUFLAND"), (transactions[2].merchant_raw, transactions[2].merchant_normalized))
-        self.assertEqual(("Tegut Filiale 2714", "TEGUT"), (transactions[3].merchant_raw, transactions[3].merchant_normalized))
-        self.assertEqual(("GO ASIA DEUTSCHLAND", "GO ASIA"), (transactions[4].merchant_raw, transactions[4].merchant_normalized))
-
-    def test_db_account_statement_rejects_generic_einkauf_candidate(self):
-        text = "\n".join([
-            "Account statement",
-            "- 1,00", "SEPA Lastschrifteinzug von Example Utility GmbH", "Einkauf bei Payment Reference", "01-01-", "2026", "01-01-", "2026", "Reference",
-        ])
-        transactions, _warnings = parse_deutsche_bank_text(text)
-        self.assertEqual("Example Utility GmbH", transactions[0].merchant_raw)
-        self.assertNotEqual("Payment Reference", transactions[0].merchant_raw)
-
-    def test_db_account_statement_supports_card_metadata_variants_and_skips_prefix(self):
-        text = "\n".join([
-            "Account statement",
-            "- 1,00", "Kartenzahlung", "Payment Reference/E2E-Ref.", "Tegut Filiale 2714//Goettingen/DE", "07-08-2025T18:52:34 Karten", "07-08-", "2025", "07-08-", "2025", "Reference",
-            "- 2,00", "Kartenzahlung", "ALDI NORD//GOETTINGEN/DE", "11-08-2025T20:15:02 Kartennr. 53549", "11-08-", "2025", "11-08-", "2025", "Reference",
-            "- 3,00", "Kartenzahlung", "GO ASIA DEUTSCHLAND//GOETTINGEN/DE", "09-08-2025T19:25:14 Karte", "09-08-", "2025", "09-08-", "2025", "Reference",
-            "- 4,00", "Kartenzahlung", "KAUFLAND GOETTINGEN IN//GOETTINGEN/DE", "10-08-2025T00:00:00 Karten", "10-08-", "2025", "10-08-", "2025", "Reference",
-            "- 5,00", "Kartenzahlung", "UMG GASTRONOMIE//GOETTINGEN/DE", "12-08-2025T12:00:00 Folgenr.", "12-08-", "2025", "12-08-", "2025", "Reference",
-        ])
-        transactions, _warnings = parse_deutsche_bank_text(text)
-        self.assertEqual([
-            ("Tegut Filiale 2714", "TEGUT"),
-            ("ALDI NORD", "ALDI"),
-            ("GO ASIA DEUTSCHLAND", "GO ASIA"),
-            ("KAUFLAND GOETTINGEN IN", "KAUFLAND"),
-            ("UMG GASTRONOMIE", "UMG GASTRONOMIE"),
-        ], [(item.merchant_raw, item.merchant_normalized) for item in transactions])
-
-    def test_unresolved_db_merchant_warning_reaches_preview_audit(self):
-        transactions, _warnings = parse_deutsche_bank_text(self._fixture_text("db_account_statement_merchants.txt"))
-        preview = ImportPreview("merchant-warning", "statement.pdf", "deutsche_bank_pdf", "merchant-hash", transactions, [])
-        original_preview = self.service.preview
-        self.service.preview = lambda filename, content, source_path="": preview
-        try:
-            result = self.service.preview_many([{"filename": "statement.pdf", "content": b"synthetic"}])
-        finally:
-            self.service.preview = original_preview
-        self.assertEqual(1, result["audit"]["warning_transaction_count"])
-        self.assertTrue(any(finding["code"] == "TRANSACTION_WARNING" and MERCHANT_WARNING in finding["message"] for finding in result["audit"]["findings"]))
-
-    def test_paym_order_credit_is_not_auto_internal_transfer(self):
-        transaction = self._db_statement_transaction()
-        prepared = self.service._prepare(transaction, "deutsche_bank_pdf")
-        self.assertEqual("currency_exchange", prepared["transaction_kind"])
-        self.assertEqual(0, prepared["is_internal_transfer"])
-
-    def test_eigenkonto_still_marks_internal_transfer(self):
-        transactions, _warnings = parse_deutsche_bank_text(
-            "Account statement\n"
-            "- 20,00\n"
-            "SEPA Überweisung an EIGENKONTO\n"
-            "OWN ACCOUNT\n"
-            "07-06-\n"
-            "2026\n"
-            "07-06-\n"
-            "2026\n"
-            "Reference DE00987654329876543210\n"
-        )
-        self.assertEqual(1, len(transactions))
-        self.assertTrue(transactions[0].is_internal_transfer)
-
-    def test_currency_exchange_rule_marks_paym_order_credit(self):
-        transaction = self._db_statement_transaction()
-        prepared = self.service._prepare(transaction, "deutsche_bank_pdf")
-        self.assertEqual("currency_exchange", prepared["transaction_kind"])
-        self.assertEqual("currency_exchange", prepared["excluded_reason"])
-
-    def test_currency_exchange_is_not_internal_transfer(self):
-        transaction = self._db_statement_transaction()
-        prepared = self.service._prepare(transaction, "deutsche_bank_pdf")
-        self.assertEqual(0, prepared["is_internal_transfer"])
-
-    def test_configured_own_iban_transfer_still_marks_internal_transfer(self):
-        transaction = self._db_statement_transaction(
-            description_raw="Transfer to own broker DE00987654329876543210",
-            raw={"layout": "db_account_statement", "details_lines": ["DE00987654329876543210"]},
-            source_record_key="db_account_statement:own-transfer",
-        )
-        prepared = self.service._prepare(transaction, "deutsche_bank_pdf")
-        self.assertEqual("", prepared["excluded_reason"])
-        from finance_tracker.reconciliation.transfers import mark_internal_transfers
-
-        mark_internal_transfers([prepared], self.config)
-        self.assertEqual(1, prepared["is_internal_transfer"])
-        self.assertEqual("internal_transfer", prepared["excluded_reason"])
-
-    def test_same_day_same_amount_different_merchants_are_both_saved(self):
-        transactions, _warnings = parse_deutsche_bank_text(self._fixture_text("db_transactions_layout.txt"))
-        prepared = [self.service._prepare(item, "deutsche_bank_pdf") for item in transactions]
-        result = self.db.write_import({"path": "", "filename": "statement.pdf", "source_type": "deutsche_bank_pdf", "sha256": "db-1"}, prepared)
-        self.assertEqual(3, result["inserted"])
-        merchants = [row["merchant"] for row in self.db.transaction_rows()]
-        self.assertIn("EXAMPLE MARKET", merchants)
-        self.assertIn("SECOND SHOP", merchants)
-
-    def test_unknown_pdf_fallback_returns_warning_and_preview_summary_includes_it(self):
-        transactions, warnings = parse_deutsche_bank_text("Unknown Merchant\n01.06.2026\n-12,50\n")
-        preview = ImportPreview("fallback-token", "unknown.pdf", "deutsche_bank_pdf", "hash", transactions, warnings)
-        self.assertIn(FALLBACK_WARNING, preview.warnings)
-        self.assertIn(FALLBACK_WARNING, preview.summary()["warnings"])
-
     def test_paypal_english_and_german_are_both_supported(self):
         english = parse_paypal_csv(self._fixture_bytes("paypal_en.csv"), "paypal-me.csv", self.config)
         german = parse_paypal_csv(self._fixture_bytes("paypal_de.csv"), "paypal-wife.csv", self.config)
@@ -531,6 +318,62 @@ class FinanceTrackerTests(unittest.TestCase):
         self.assertFalse(transactions[2].is_internal_transfer)
         self.assertEqual("REAL IBAN MERCHANT", transactions[2].merchant_normalized)
 
+    def test_kontoumsaetze_csv_is_recognized_parsed_and_redacts_sensitive_raw_fields(self):
+        source_type, transactions, warnings = parse_file(
+            "Kontoumsaetze_synthetic-czj.csv", self._fixture_bytes("kontoumsaetze-czj.csv"), self.config
+        )
+
+        self.assertEqual("kontoumsaetze_csv", source_type)
+        self.assertFalse(warnings)
+        self.assertEqual(2, len(transactions))
+        self.assertEqual("2026-06-01", transactions[0].booking_date.isoformat())
+        self.assertEqual("2026-06-02", transactions[0].value_date.isoformat())
+        self.assertEqual("-12.34", str(transactions[0].amount))
+        self.assertEqual("EUR", transactions[0].currency)
+        self.assertEqual("Lastschrift", transactions[0].transaction_type)
+        self.assertEqual("SYNTHETIC MARKET", transactions[0].merchant_normalized)
+        self.assertEqual("ME", transactions[0].account)
+        self.assertEqual("kontoumsaetze:0", transactions[0].source_record_key)
+        self.assertEqual(
+            {"booking_date", "value_date", "amount", "currency", "transaction_type"},
+            set(transactions[0].raw),
+        )
+        self.assertFalse(
+            any(
+                token in key.casefold()
+                for key in transactions[0].raw
+                for token in ("iban", "bic", "referenz", "kunden", "mandat", "gläubiger", "creditor")
+            )
+        )
+
+    def test_legacy_fx_rule_applies_to_kontoumsaetze_csv(self):
+        config = FinanceTrackerConfig(currency_exchange_rules=[{
+            "name": "Legacy FX rule",
+            "source_types": ["deutsche_bank_pdf"],
+            "contains_all": ["marker a", "marker b"],
+        }])
+        service = FinanceService(self.db, config)
+        transaction = ParsedTransaction(
+            booking_date=date(2026, 6, 1), amount=Decimal("100.00"), currency="EUR",
+            merchant_raw="FX", merchant_normalized="FX", description_raw="marker a / marker b",
+        )
+
+        prepared = service._prepare(transaction, "kontoumsaetze_csv")
+
+        self.assertEqual("currency_exchange", prepared["transaction_kind"])
+        self.assertEqual("currency_exchange", prepared["excluded_reason"])
+
+    def test_parse_file_rejects_pdf_with_csv_only_error(self):
+        with self.assertRaisesRegex(ImportErrorForUser, "CSV"):
+            parse_file("old.PDF", b"synthetic", self.config)
+
+    def test_kontoumsaetze_rejects_missing_header_and_preview_forces_me_account(self):
+        with self.assertRaisesRegex(ImportErrorForUser, "Kontoumsaetze"):
+            parse_file("Kontoumsaetze_bad-czj.csv", b"not a statement", self.config)
+
+        preview = self.service.preview("Kontoumsaetze_synthetic-czj.csv", self._fixture_bytes("kontoumsaetze-czj.csv"))
+        self.assertTrue(all(transaction.account == "ME" for transaction in preview.transactions))
+
     def test_batch_preview_blocks_non_eur_and_collects_baseline_diff(self):
         content = b"Date,Description,Currency,Gross,Name,Transaction ID,From Email Address\n01.06.2026,Payment,USD,-12.50,Shop,TX-1,me@example.invalid\n"
         result = self.service.preview_many([{"filename": "paypal.csv", "content": content}])
@@ -556,43 +399,6 @@ class FinanceTrackerTests(unittest.TestCase):
         self.assertEqual(result["can_confirm"], audit["can_confirm"])
         self.assertEqual(2, audit["parsed_transaction_count"])
         self.assertEqual("10.05", audit["totals_by_currency"]["EUR"])
-
-    def test_parser_warnings_are_warning_findings(self):
-        preview = ImportPreview(
-            "warning-preview", "unknown.pdf", "deutsche_bank_pdf", "warning-hash",
-            [self._db_statement_transaction()],
-            ["synthetic parser warning"],
-            parser_warnings=["synthetic parser warning"],
-        )
-        original_preview = self.service.preview
-        self.service.preview = lambda filename, content, source_path="": preview
-        try:
-            result = self.service.preview_many([{"filename": "unknown.pdf", "content": b"synthetic"}])
-        finally:
-            self.service.preview = original_preview
-        audit = result["audit"]
-        self.assertEqual("warning", audit["status"])
-        self.assertTrue(audit["can_confirm"])
-        self.assertEqual(result["can_confirm"], audit["can_confirm"])
-        self.assertTrue(any(item["code"] == "PARSER_WARNING" for item in audit["findings"]))
-        self.assertEqual(1, len(audit["findings"]))
-
-    def test_transaction_warnings_are_distinct_findings_and_count_transactions_once(self):
-        preview = ImportPreview(
-            "transaction-warning-preview", "warning.pdf", "deutsche_bank_pdf", "warning-hash",
-            [self._db_statement_transaction(warnings=["first", "second", "first"])],
-            ["first", "second", "first"],
-        )
-        original_preview = self.service.preview
-        self.service.preview = lambda filename, content, source_path="": preview
-        try:
-            result = self.service.preview_many([{"filename": "warning.pdf", "content": b"synthetic"}])
-        finally:
-            self.service.preview = original_preview
-        findings = result["audit"]["findings"]
-        self.assertEqual(["TRANSACTION_WARNING", "TRANSACTION_WARNING"], [item["code"] for item in findings])
-        self.assertEqual(1, result["audit"]["warning_transaction_count"])
-        self.assertEqual(2, result["audit"]["warning_finding_count"])
 
     def test_excluded_transactions_are_counted_by_reason(self):
         result = self.service.preview_many([
@@ -679,16 +485,6 @@ class FinanceTrackerTests(unittest.TestCase):
         self.assertFalse(finding["details"]["exists_in_database"])
         self.assertEqual(2, finding["details"]["occurrence_count"])
 
-    def test_duplicate_historical_hash_is_reported_even_when_parsing_fails(self):
-        content = b"not a valid pdf"
-        self.db.write_import({"path": "", "filename": "old.pdf", "source_type": "deutsche_bank_pdf", "sha256": hashlib.sha256(content).hexdigest()}, [])
-        result = self.service.preview_many([{"filename": "broken.pdf", "content": content}])
-        finding = next(item for item in result["audit"]["findings"] if item["code"] == "DUPLICATE_SOURCE_FILE")
-        self.assertEqual(["broken.pdf"], finding["details"]["filenames"])
-        self.assertTrue(finding["details"]["exists_in_database"])
-        self.assertFalse(result["can_confirm"])
-        self.assertEqual(result["can_confirm"], result["audit"]["can_confirm"])
-
     def test_duplicate_external_id_is_grouped_by_source_type_and_trimmed(self):
         transactions = [
             self._db_statement_transaction(external_id=" ID-7 ", source_record_index=0),
@@ -702,17 +498,6 @@ class FinanceTrackerTests(unittest.TestCase):
         self.assertFalse(result["audit"]["can_confirm"])
         self.assertTrue(any(item["error"] == "批次内存在重复 external ID" for item in result["blockers"]))
 
-    def test_external_id_empty_and_different_source_type_are_not_duplicates(self):
-        paypal = self._synthetic_preview("paypal.csv", "paypal_csv", [
-            self._db_statement_transaction(external_id="", source_record_index=0),
-            self._db_statement_transaction(external_id="same", source_record_index=1),
-        ])
-        bank = self._synthetic_preview("bank.pdf", "deutsche_bank_pdf", [
-            self._db_statement_transaction(external_id="same", source_record_index=0),
-        ])
-        result = self._preview_audit([paypal, bank])
-        self.assertFalse(any(item["code"] == "DUPLICATE_EXTERNAL_ID" for item in result["audit"]["findings"]))
-
     def test_external_id_duplicate_detection_is_case_sensitive(self):
         preview = self._synthetic_preview("case.csv", "paypal_csv", [
             self._db_statement_transaction(external_id="abc", source_record_index=0),
@@ -720,90 +505,6 @@ class FinanceTrackerTests(unittest.TestCase):
         ])
         result = self._preview_audit([preview])
         self.assertFalse(any(item["code"] == "DUPLICATE_EXTERNAL_ID" for item in result["audit"]["findings"]))
-
-    def test_unique_paypal_bank_match_uses_full_batch_indexes_and_info_status(self):
-        paypal = self._db_statement_transaction(amount=Decimal("-10.00"), booking_date=date(2026, 6, 1), external_id="pp")
-        bank = self._db_statement_transaction(amount=Decimal("-10.00"), booking_date=date(2026, 6, 6), merchant_raw="PayPal Europe", merchant_normalized="PayPal Europe", external_id="bank")
-        result = self._preview_audit([
-            self._synthetic_preview("paypal.csv", "paypal_csv", [paypal]),
-            self._synthetic_preview("bank.pdf", "deutsche_bank_pdf", [bank]),
-        ])
-        matches = [item for item in result["audit"]["findings"] if item["code"] == "PAYPAL_BANK_MATCH"]
-        self.assertEqual(1, len(matches))
-        self.assertEqual("info", matches[0]["severity"])
-        self.assertEqual([0, 1], matches[0]["transaction_indexes"])
-        self.assertEqual(5, matches[0]["details"]["date_difference_days"])
-        self.assertEqual("-10.00", matches[0]["details"]["canonical_amount"])
-        self.assertEqual(1, result["audit"]["info_finding_count"])
-        self.assertEqual("pass", result["audit"]["status"])
-        self.assertTrue(result["can_confirm"])
-
-    def test_paypal_bank_match_boundaries_and_eligibility(self):
-        paypal = self._db_statement_transaction(amount=Decimal("-10.00"), booking_date=date(2026, 6, 1))
-        cases = [
-            (date(2026, 6, 6), "PayPal Europe", Decimal("-10.00"), "EUR", True),
-            (date(2026, 6, 7), "PayPal Europe", Decimal("-10.00"), "EUR", False),
-            (date(2026, 6, 6), "PayPal Europe", Decimal("10.00"), "EUR", False),
-            (date(2026, 6, 6), "PayPal Europe", Decimal("-10.00"), "USD", False),
-            (date(2026, 6, 6), "Other bank", Decimal("-10.00"), "EUR", False),
-        ]
-        for index, (booking_date, merchant, amount, currency, expected) in enumerate(cases):
-            bank = self._db_statement_transaction(booking_date=booking_date, merchant_raw=merchant, merchant_normalized=merchant, amount=amount, currency=currency)
-            result = self._preview_audit([
-                self._synthetic_preview(f"paypal-{index}.csv", "paypal_csv", [paypal]),
-                self._synthetic_preview(f"bank-{index}.pdf", "deutsche_bank_pdf", [bank]),
-            ])
-            has_match = any(item["code"] == "PAYPAL_BANK_MATCH" for item in result["audit"]["findings"])
-            self.assertEqual(expected, has_match)
-
-    def test_preview_paypal_matching_compares_exact_decimal_amounts(self):
-        for paypal_amount, bank_amount, expected in (
-            (Decimal("1.001"), Decimal("1.009"), False),
-            (Decimal("1.001"), Decimal("1.001"), True),
-            (Decimal("1.001"), Decimal("1.0010"), True),
-            (Decimal("-1.001"), Decimal("1.001"), False),
-        ):
-            paypal = self._db_statement_transaction(amount=paypal_amount, booking_date=date(2026, 6, 1))
-            bank = self._db_statement_transaction(amount=bank_amount, booking_date=date(2026, 6, 2), merchant_raw="PAYPAL Bank", merchant_normalized="PAYPAL Bank")
-            result = self._preview_audit([
-                self._synthetic_preview("paypal.csv", "paypal_csv", [paypal]),
-                self._synthetic_preview("bank.pdf", "deutsche_bank_pdf", [bank]),
-            ])
-            self.assertEqual(expected, any(item["code"] == "PAYPAL_BANK_MATCH" for item in result["audit"]["findings"]))
-
-    def test_post_import_paypal_matching_keeps_legacy_stored_row_predicate(self):
-        paypal = {"id": 1, "amount_cents": 100, "currency": "EUR", "unsupported_currency": 1, "booking_date": "2026-06-01"}
-        bank = {"id": 2, "amount_cents": 100, "currency": "USD", "unsupported_currency": 1, "booking_date": "2026-06-02", "merchant": "PAYPAL Bank", "description": ""}
-        matches = reconcile_paypal_rows([paypal], [bank])
-        self.assertEqual(1, len(matches))
-        self.assertEqual("automatic", matches[0]["status"])
-
-    def test_ambiguous_paypal_bank_candidates_are_one_warning_group_without_matches(self):
-        paypal = self._db_statement_transaction(amount=Decimal("-10.00"), booking_date=date(2026, 6, 1))
-        banks = [self._db_statement_transaction(amount=Decimal("-10.00"), booking_date=date(2026, 6, day), merchant_raw=f"PAYPAL Bank {day}", merchant_normalized=f"PAYPAL Bank {day}") for day in (2, 3)]
-        result = self._preview_audit([
-            self._synthetic_preview("paypal.csv", "paypal_csv", [paypal]),
-            self._synthetic_preview("bank-a.pdf", "deutsche_bank_pdf", [banks[0]]),
-            self._synthetic_preview("bank-b.pdf", "deutsche_bank_pdf", [banks[1]]),
-        ])
-        ambiguous = [item for item in result["audit"]["findings"] if item["code"] == "PAYPAL_BANK_AMBIGUOUS"]
-        self.assertEqual(1, len(ambiguous))
-        self.assertEqual("warning", ambiguous[0]["severity"])
-        self.assertEqual([0, 1, 2], ambiguous[0]["transaction_indexes"])
-        self.assertFalse(any(item["code"] == "PAYPAL_BANK_MATCH" for item in result["audit"]["findings"]))
-        self.assertEqual("warning", result["audit"]["status"])
-        self.assertTrue(result["can_confirm"])
-
-    def test_two_paypal_transactions_sharing_one_bank_are_ambiguous(self):
-        paypals = [self._db_statement_transaction(amount=Decimal("-10.00"), booking_date=date(2026, 6, 1), external_id=f"pp-{index}") for index in (1, 2)]
-        bank = self._db_statement_transaction(amount=Decimal("-10.00"), booking_date=date(2026, 6, 2), merchant_raw="PAYPAL Bank", merchant_normalized="PAYPAL Bank")
-        result = self._preview_audit([
-            self._synthetic_preview("paypal.csv", "paypal_csv", paypals),
-            self._synthetic_preview("bank.pdf", "deutsche_bank_pdf", [bank]),
-        ])
-        ambiguous = [item for item in result["audit"]["findings"] if item["code"] == "PAYPAL_BANK_AMBIGUOUS"]
-        self.assertEqual(1, len(ambiguous))
-        self.assertEqual([0, 1, 2], ambiguous[0]["transaction_indexes"])
 
     def test_preview_many_returns_full_transactions_not_only_sample(self):
         header = "Date,Description,Currency,Gross,Name,Transaction ID,From Email Address\n"
@@ -838,50 +539,6 @@ class FinanceTrackerTests(unittest.TestCase):
         self.assertGreaterEqual(result["stats"]["warning_count"], 2)
         self.assertEqual(1, result["stats"]["internal_transfer_count"])
         self.assertEqual(0, result["stats"]["failed_transaction_count"])
-
-    def test_preview_stats_include_currency_exchange_count(self):
-        preview = ImportPreview(
-            "preview-fx",
-            "fx.pdf",
-            "deutsche_bank_pdf",
-            "hash-fx",
-            [self._db_statement_transaction()],
-            [],
-        )
-        original_preview = self.service.preview
-        self.service.preview = lambda filename, content, source_path="": preview
-        try:
-            result = self.service.preview_many([{"filename": "fx.pdf", "content": b"synthetic"}])
-        finally:
-            self.service.preview = original_preview
-        self.assertEqual(1, result["stats"]["total"])
-        self.assertEqual(1, result["stats"]["currency_exchange_count"])
-
-    def test_complete_preview_marks_currency_exchange_transaction(self):
-        preview = ImportPreview(
-            "preview-fx",
-            "fx.pdf",
-            "deutsche_bank_pdf",
-            "hash-fx",
-            [self._db_statement_transaction()],
-            [],
-        )
-        original_preview = self.service.preview
-        self.service.preview = lambda filename, content, source_path="": preview
-        try:
-            result = self.service.preview_many([{"filename": "fx.pdf", "content": b"synthetic"}])
-        finally:
-            self.service.preview = original_preview
-        self.assertEqual("currency_exchange", result["transactions"][0]["transaction_kind"])
-        self.assertFalse(result["transactions"][0]["is_internal_transfer"])
-
-    def test_transaction_warnings_appear_in_complete_preview_response(self):
-        result = self.service.preview_many([
-            {"filename": "paypal-me.csv", "content": self._fixture_bytes("paypal_en.csv")},
-        ])
-        warning_rows = [item for item in result["transactions"] if item["warnings"]]
-        self.assertTrue(warning_rows)
-        self.assertIn("PP-7", {item["external_id"] for item in warning_rows})
 
     def test_preview_does_not_write_to_database(self):
         self.service.preview_many([
@@ -930,27 +587,6 @@ class FinanceTrackerTests(unittest.TestCase):
         if filtered:
             filtered[0]["merchant_raw"] = "CHANGED"
         self.assertEqual(original, result["transactions"])
-
-    def test_paypal_purchase_matches_bank_debit(self):
-        self._insert_bank_paypal("auto", "PayPal Europe")
-        paypal_preview = self.service.preview("paypal-me.csv", self._fixture_bytes("paypal_en.csv"))
-        self.service.confirm(paypal_preview.token)
-        matched = [dict(row) for row in self.db.reconciliation_rows() if row["kind"] == "paypal_bank" and row["status"] == "automatic"]
-        self.assertTrue(matched)
-        bank_rows = [row for row in self.db.transaction_rows() if row["merchant_raw"] == "PayPal Europe"]
-        self.assertEqual("paypal_matched", bank_rows[0]["excluded_reason"])
-
-    def test_paypal_multiple_bank_candidates_stay_suggested(self):
-        self._insert_bank_paypal("cand-1", "PayPal Europe Candidate 1")
-        self._insert_bank_paypal("cand-2", "PayPal Europe Candidate 2")
-        paypal_preview = self.service.preview("paypal-me.csv", self._fixture_bytes("paypal_en.csv"))
-        self.service.confirm(paypal_preview.token)
-        rows = [dict(row) for row in self.db.reconciliation_rows() if row["kind"] == "paypal_bank"]
-        suggested = [row for row in rows if row["status"] == "suggested"]
-        self.assertTrue(suggested)
-        self.assertLess(suggested[0]["confidence"], 0.9)
-        bank_rows = [row for row in self.db.transaction_rows() if "PayPal Europe" in row["merchant_raw"]]
-        self.assertTrue(all(row["excluded_reason"] != "paypal_matched" for row in bank_rows))
 
     def test_exact_refund_pair_is_marked_excluded(self):
         preview = self.service.preview("paypal-me.csv", self._fixture_bytes("paypal_en.csv"))
@@ -1005,26 +641,6 @@ class FinanceTrackerTests(unittest.TestCase):
         row = next(row for row in self.db.transaction_rows() if row["external_id"] == "PP-4")
         self.assertEqual("unclassified", row["category_status"])
         self.assertEqual("phase_1_default", row["category_reason"])
-
-    def test_merchant_coverage_excludes_non_spending_transactions_and_keeps_review_queue(self):
-        transactions = [
-            self._db_statement_transaction(merchant_raw="KAUFLAND", merchant_normalized="KAUFLAND", description_raw="", raw={}, amount=Decimal("-10.00")),
-            self._db_statement_transaction(merchant_raw="UNMATCHED SHOP", merchant_normalized="UNMATCHED SHOP", description_raw="", raw={}, amount=Decimal("-5.00")),
-            self._db_statement_transaction(merchant_raw="OWN ACCOUNT", merchant_normalized="OWN ACCOUNT", description_raw="", raw={}, amount=Decimal("-20.00"), is_internal_transfer=True),
-            self._db_statement_transaction(merchant_raw="PAYM.ORDER EXCHANGE", merchant_normalized="PAYM.ORDER EXCHANGE", description_raw="", raw={}, amount=Decimal("100.00"), transaction_kind="currency_exchange"),
-            self._db_statement_transaction(merchant_raw="FAILED SHOP", merchant_normalized="FAILED SHOP", description_raw="", raw={}, amount=Decimal("-7.00"), is_failed_transaction=True),
-            self._db_statement_transaction(merchant_raw="PAYM.ORDER REMITTANCE", merchant_normalized="PAYM.ORDER REMITTANCE", description_raw="", raw={}, amount=Decimal("100.00")),
-        ]
-        prepared = [self.service._prepare(item, "deutsche_bank_pdf") for item in transactions]
-        self.db.write_import({"path": "", "filename": "coverage.pdf", "source_type": "deutsche_bank_pdf", "sha256": "coverage-1"}, prepared)
-
-        coverage = self.service.merchant_coverage()
-
-        self.assertEqual(3, coverage["eligible_transactions"])
-        self.assertEqual(1, coverage["baseline_matched_transactions"])
-        self.assertEqual(2, coverage["pending_review_transactions"])
-        self.assertEqual(33.33, coverage["coverage_percent"])
-        self.assertEqual({"internal_transfer": 1, "currency_exchange": 1, "failed_transaction": 1}, coverage["excluded_by_reason"])
 
     def test_historical_merchant_coverage_returns_aggregates_without_transaction_content(self):
         historical_path = Path(self.directory.name) / "historical.json"
@@ -1114,6 +730,95 @@ class FinanceTrackerTests(unittest.TestCase):
         finally:
             con.close()
 
+    def test_remove_pdf_source_data_is_atomic_and_idempotent(self):
+        self._use_project_database()
+        pdf = self.service._prepare(
+            self._db_statement_transaction(source_record_key="pdf-removal"), "deutsche_bank_pdf"
+        )
+        paypal = self.service._prepare(
+            self._db_statement_transaction(source_record_key="paypal-removal"), "paypal_csv"
+        )
+        trade_republic = self.service._prepare(
+            self._db_statement_transaction(source_record_key="trade-removal"), "trade_republic_csv"
+        )
+        self.db.write_import_batch([
+            ({"path": "", "filename": "legacy.pdf", "source_type": "deutsche_bank_pdf", "sha256": "pdf-removal"}, [pdf]),
+            ({"path": "", "filename": "paypal.csv", "source_type": "paypal_csv", "sha256": "paypal-removal"}, [paypal]),
+            ({"path": "", "filename": "trade.csv", "source_type": "trade_republic_csv", "sha256": "trade-removal"}, [trade_republic]),
+        ])
+        pdf_id = self.db.transaction_rows(filters={"source": "deutsche_bank_pdf"})[0]["id"]
+        paypal_id = self.db.transaction_rows(filters={"source": "paypal_csv"})[0]["id"]
+        with self.db.connect() as con:
+            con.execute(
+                "INSERT INTO reconciliations(left_transaction_id,right_transaction_id,kind,confidence) VALUES(?,?,?,?)",
+                (pdf_id, paypal_id, "synthetic", 1.0),
+            )
+            con.execute(
+                "INSERT INTO audit_log(transaction_id,action,created_at) VALUES(?,?,?)",
+                (pdf_id, "synthetic", "2026-01-01T00:00:00+00:00"),
+            )
+
+        result = self.db.remove_pdf_source_data()
+
+        self.assertEqual({"source_files_removed": 1, "transactions_removed": 1}, result)
+        self.assertEqual(0, self._source_count("deutsche_bank_pdf"))
+        self.assertEqual(1, self._source_count("paypal_csv"))
+        self.assertEqual(1, self._source_count("trade_republic_csv"))
+        self.assertEqual(2, self.db.table_count("import_batches"))
+        self.assertEqual(0, self.db.table_count("reconciliations"))
+        self.assertEqual(1, self.db.audit_count("remove_pdf_source_data"))
+        self.assertEqual(
+            {"source_files_removed": 0, "transactions_removed": 0}, self.db.remove_pdf_source_data()
+        )
+        self.assertEqual(1, self.db.audit_count("remove_pdf_source_data"))
+        self.assertEqual(1, len(list((Path(self.directory.name) / "project" / "exports" / "backups" / "schema").glob("*-pdf-source-removal.sqlite3"))))
+
+    def test_remove_pdf_source_data_rolls_back_when_a_foreign_key_dependent_delete_fails(self):
+        self._use_project_database()
+        pdf = self.service._prepare(
+            self._db_statement_transaction(source_record_key="pdf-rollback"), "deutsche_bank_pdf"
+        )
+        self.db.write_import(
+            {"path": "", "filename": "legacy.pdf", "source_type": "deutsche_bank_pdf", "sha256": "pdf-rollback"}, [pdf]
+        )
+        with self.db.connect() as con:
+            con.execute(
+                "CREATE TRIGGER fail_pdf_transaction_removal BEFORE DELETE ON transactions "
+                "BEGIN SELECT RAISE(ABORT, 'synthetic removal failure'); END"
+            )
+
+        with self.assertRaises(sqlite3.DatabaseError):
+            self.db.remove_pdf_source_data()
+
+        self.assertEqual(1, self._source_count("deutsche_bank_pdf"))
+        self.assertEqual(1, self.db.table_count("transactions"))
+        self.assertEqual(0, self.db.audit_count("remove_pdf_source_data"))
+
+    def test_initialize_runs_pdf_source_removal_migration_once(self):
+        self._use_project_database()
+        pdf = self.service._prepare(
+            self._db_statement_transaction(source_record_key="startup-removal"), "deutsche_bank_pdf"
+        )
+        self.db.write_import(
+            {"path": "", "filename": "legacy.pdf", "source_type": "deutsche_bank_pdf", "sha256": "startup-removal"}, [pdf]
+        )
+        with self.db.connect() as con:
+            con.execute("DELETE FROM schema_migrations WHERE version=5")
+
+        Database(self.db.path).initialize()
+
+        self.assertEqual(0, self._source_count("deutsche_bank_pdf"))
+        self.assertEqual(1, self.db.audit_count("remove_pdf_source_data"))
+
+    def _source_count(self, source_type: str) -> int:
+        with self.db.connect() as con:
+            return con.execute("SELECT COUNT(*) FROM source_files WHERE source_type=?", (source_type,)).fetchone()[0]
+
+    def _use_project_database(self) -> None:
+        self.db = Database(Path(self.directory.name) / "project" / "data" / "finance.sqlite3")
+        self.db.initialize()
+        self.service = FinanceService(self.db, self.config)
+
     def test_merchant_resolver_prefers_exact_alias_over_contains_alias(self):
         from finance_tracker.merchant_rules import MerchantResolver, MerchantRule
 
@@ -1144,69 +849,13 @@ class FinanceTrackerTests(unittest.TestCase):
         self.assertEqual("rule_conflict_contains", conflict.category_reason)
         self.assertEqual("manual", manual.category_status)
 
-    def test_preview_and_confirmation_share_merchant_rule_resolution(self):
-        category_id = self.db.category_rows()[0]["id"]
-        merchant_id = self.db.upsert_canonical_merchant("SYNTHETIC MARKET", "test")
-        self.db.upsert_merchant_alias(merchant_id, "SYNTHETIC MARKET", "exact", "test")
-        self.db.upsert_merchant_category_rule(merchant_id, "expense", category_id, "test")
-        transaction = self._db_statement_transaction(
-            merchant_raw="SYNTHETIC MARKET",
-            merchant_normalized="SYNTHETIC MARKET",
-            description_raw="",
-            raw={},
-            amount=Decimal("-10.00"),
-        )
-        preview = self._synthetic_preview("synthetic.pdf", "deutsche_bank_pdf", [transaction], token="rule-preview")
-        original_preview = self.service.preview
-        self.service.preview = lambda filename, content, source_path="": preview
-        try:
-            preview_rows = self.service.preview_many([{"filename": "synthetic.pdf", "content": b"synthetic"}])["transactions"]
-        finally:
-            self.service.preview = original_preview
-
-        self.service.previews[preview.token] = preview
-        self.service.confirm("rule-preview")
-        stored = self.db.transaction_rows()[0]
-        self.assertEqual("SYNTHETIC MARKET", preview_rows[0]["canonical_merchant"])
-        self.assertEqual(preview_rows[0]["category_reason"], stored["category_reason"])
-        self.assertEqual(category_id, stored["category_id"])
-
-    def test_legacy_baseline_import_backfills_once_and_preserves_manual_override(self):
-        baseline_path = Path(self.directory.name) / "legacy-categories.md"
-        baseline_path.write_text(
-            "## 活动支出\n\n| 子类 | 关键字/商户 | 说明 |\n|------|-----------|------|\n| 合成超市 | SYNTHETIC MARKET | test |\n",
-            encoding="utf-8",
-        )
-        first = self._db_statement_transaction(merchant_raw="SYNTHETIC MARKET", merchant_normalized="SYNTHETIC MARKET", description_raw="", raw={}, amount=Decimal("-10.00"))
-        second = self._db_statement_transaction(merchant_raw="SYNTHETIC MARKET", merchant_normalized="SYNTHETIC MARKET", description_raw="manual", raw={}, amount=Decimal("-20.00"), external_id="manual-row")
-        prepared = [self.service._prepare(item, "deutsche_bank_pdf") for item in (first, second)]
-        self.db.write_import({"path": "", "filename": "synthetic.pdf", "source_type": "deutsche_bank_pdf", "sha256": "legacy-baseline-seed"}, prepared)
-        manual_category_id = self.db.category_rows()[0]["id"]
-        manual_transaction_id = self.db.transaction_rows()[0]["id"]
-        self.db.set_override(manual_transaction_id, manual_category_id, "synthetic override")
-
-        first_result = self.service.import_legacy_baseline_rules(baseline_path)
-        second_result = self.service.import_legacy_baseline_rules(baseline_path)
-
-        rows = self.db.transaction_rows()
-        backfilled = next(row for row in rows if row["merchant"] == "SYNTHETIC MARKET" and row["category_status"] != "manual")
-        manual = next(row for row in rows if row["category_status"] == "manual")
-        self.assertEqual(1, first_result["rules_created"])
-        self.assertEqual(1, first_result["transactions_updated"])
-        self.assertEqual(0, second_result["rules_created"])
-        self.assertEqual(0, second_result["transactions_updated"])
-        self.assertEqual("合成超市", backfilled["level3"])
-        self.assertEqual("legacy_baseline_rule", backfilled["category_reason"])
-        self.assertEqual("manual", manual["category_status"])
-        self.assertEqual(1, self.db.audit_count("merchant_rule_backfill"))
-
     def test_statement_directory_scan_recurses_infers_accounts_and_marks_duplicates(self):
         from finance_tracker.statement_directory import StatementDirectoryScanner
 
         root = Path(self.directory.name) / "银行流水"
         nested = root / "nested"
         nested.mkdir(parents=True)
-        (root / "main.pdf").write_bytes(b"synthetic-pdf")
+        (root / "main.PDF").write_bytes(b"synthetic-pdf")
         (nested / "joint-czj.csv").write_bytes(b"synthetic-czj")
         duplicate = nested / "joint-cr.csv"
         duplicate.write_bytes(b"synthetic-cr")
@@ -1217,11 +866,26 @@ class FinanceTrackerTests(unittest.TestCase):
         rows = StatementDirectoryScanner(root, self.db.source_exists).scan()
 
         by_path = {row.relative_path: row for row in rows}
-        self.assertEqual("ME", by_path["main.pdf"].account)
+        self.assertNotIn("main.PDF", by_path)
         self.assertEqual("ME", by_path["nested/joint-czj.csv"].account)
         self.assertEqual("WIFE", by_path["nested/joint-cr.csv"].account)
         self.assertEqual("already_imported", by_path["nested/joint-cr.csv"].status)
         self.assertEqual("needs_account_selection", by_path["unknown.csv"].status)
+
+    def test_statement_directory_scan_ignores_pdf_and_preserves_csv_account_suffixes(self):
+        from finance_tracker.statement_directory import StatementDirectoryScanner
+
+        root = Path(self.directory.name) / "银行流水"
+        root.mkdir()
+        (root / "old.PDF").write_bytes(b"synthetic-pdf")
+        (root / "bank-czj.csv").write_bytes(b"synthetic-czj")
+        (root / "bank-cr.csv").write_bytes(b"synthetic-cr")
+
+        rows = {row.relative_path: row for row in StatementDirectoryScanner(root, self.db.source_exists).scan()}
+
+        self.assertNotIn("old.PDF", rows)
+        self.assertEqual("ME", rows["bank-czj.csv"].account)
+        self.assertEqual("WIFE", rows["bank-cr.csv"].account)
 
     def test_preview_scanned_file_uses_inferred_account(self):
         root = Path(self.directory.name) / "银行流水"
@@ -1260,87 +924,6 @@ class FinanceTrackerTests(unittest.TestCase):
         self.assertEqual(["finance_tracker.sqlite3"], result["skipped"])
         self.assertTrue(legacy_database.is_file())
         self.assertEqual(b"existing project sqlite bytes", paths.database_path.read_bytes())
-
-    def test_currency_exchange_is_written_with_excluded_reason(self):
-        transaction = self._db_statement_transaction()
-        self.db.write_import(
-            {"path": "", "filename": "fx.pdf", "source_type": "deutsche_bank_pdf", "sha256": "fx-1"},
-            [self.service._prepare(transaction, "deutsche_bank_pdf")],
-        )
-        row = self.db.transaction_rows()[0]
-        self.assertEqual("currency_exchange", row["excluded_reason"])
-        self.assertEqual("currency_exchange", row["transaction_kind"])
-        self.assertEqual(0, row["is_internal_transfer"])
-
-    def test_currency_exchange_is_excluded_from_report_income_and_net(self):
-        self.db.write_import(
-            {"path": "", "filename": "fx.pdf", "source_type": "deutsche_bank_pdf", "sha256": "fx-1"},
-            [self.service._prepare(self._db_statement_transaction(), "deutsche_bank_pdf")],
-        )
-        report = self.service.report()
-        self.assertEqual(0, report["income"])
-        self.assertEqual(0, report["net"])
-        self.assertEqual(0, report["count"])
-
-    def test_expected_snapshot_matches_prepared_rows(self):
-        expected = json.loads(self._fixture_bytes("expected_transactions.json"))
-        db_transactions, _ = parse_deutsche_bank_text(self._fixture_text("db_transactions_layout.txt"))
-        db_statement, _ = parse_deutsche_bank_text(self._fixture_text("db_account_statement_layout.txt"))
-        paypal_en = parse_paypal_csv(self._fixture_bytes("paypal_en.csv"), "paypal-me.csv", self.config)
-        paypal_de = parse_paypal_csv(self._fixture_bytes("paypal_de.csv"), "paypal-wife.csv", self.config)
-        trade_republic = parse_trade_republic_csv(self._fixture_bytes("trade_republic.csv"), self.config)
-
-        self.assertEqual(expected["deutsche_bank_transactions"], self._snapshot_from_parsed(db_transactions))
-        self.assertEqual(expected["deutsche_bank_statement"], self._snapshot_from_parsed(db_statement))
-        self.assertEqual(expected["paypal_english_kept_ids"], [item.external_id for item in paypal_en])
-        self.assertEqual(expected["paypal_german_kept_ids"], [item.external_id for item in paypal_de])
-        self.assertEqual(expected["trade_republic"], self._snapshot_from_parsed(trade_republic))
-
-    def test_reconciliation_snapshot_matches_expected(self):
-        expected = json.loads(self._fixture_bytes("expected_transactions.json"))
-        self._insert_bank_paypal("snap-auto", "PayPal Europe")
-        paypal_preview = self.service.preview("paypal-me.csv", self._fixture_bytes("paypal_en.csv"))
-        self.service.confirm(paypal_preview.token)
-        paypal_auto = [dict(row) for row in self.db.reconciliation_rows() if row["kind"] == "paypal_bank" and row["status"] == "automatic"][0]
-        self.assertEqual(expected["reconciliations"]["paypal_bank_automatic"], self._reconciliation_shape(paypal_auto))
-
-    def test_suggested_reconciliation_snapshot_matches_expected(self):
-        expected = json.loads(self._fixture_bytes("expected_transactions.json"))
-        self._insert_bank_paypal("snap-cand-1", "PayPal Europe Candidate 1")
-        self._insert_bank_paypal("snap-cand-2", "PayPal Europe Candidate 2")
-        paypal_preview = self.service.preview("paypal-me.csv", self._fixture_bytes("paypal_en.csv"))
-        self.service.confirm(paypal_preview.token)
-        paypal_suggested = [dict(row) for row in self.db.reconciliation_rows() if row["kind"] == "paypal_bank" and row["status"] == "suggested"][0]
-        self.assertEqual(expected["reconciliations"]["paypal_bank_suggested"], self._reconciliation_shape(paypal_suggested))
-
-    def _snapshot_from_parsed(self, rows):
-        return [
-            {
-                "booking_date": item.booking_date.isoformat(),
-                "value_date": (item.value_date or item.booking_date).isoformat(),
-                "amount": str(item.amount),
-                "currency": item.currency,
-                "merchant_raw": item.merchant_raw,
-                "merchant_normalized": item.merchant_normalized,
-                "account": item.account,
-                "external_id": item.external_id,
-                "transaction_type": item.transaction_type,
-                "source_format": item.source_format,
-                "is_internal_transfer": item.is_internal_transfer,
-                "is_failed_transaction": item.is_failed_transaction,
-                "excluded_reason": "internal_transfer" if item.is_internal_transfer else "failed_transaction" if item.is_failed_transaction else "",
-            }
-            for item in rows
-        ]
-
-    def _reconciliation_shape(self, row):
-        return {
-            "kind": row["kind"],
-            "reason": row["reason"],
-            "confidence": row["confidence"],
-            "status": row["status"],
-        }
-
 
 if __name__ == "__main__":
     unittest.main()

@@ -10,7 +10,6 @@ from pathlib import Path
 from typing import Iterator
 
 from .categories import DEFAULT_CATEGORIES
-from .reconciliation import reconcile_paypal_rows
 
 
 SCHEMA_VERSION = 5
@@ -123,9 +122,18 @@ class Database:
             for column, definition in missing_columns.items():
                 if not self._has_column(con, "transactions", column):
                     con.execute(f"ALTER TABLE transactions ADD COLUMN {column} {definition}")
-            con.execute("INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (?, ?)", (SCHEMA_VERSION, now()))
             for level1, level2, level3, bucket in DEFAULT_CATEGORIES:
                 con.execute("INSERT OR IGNORE INTO categories(level1,level2,level3,bucket) VALUES(?,?,?,?)", (level1, level2, level3, bucket))
+            needs_pdf_source_removal = con.execute(
+                "SELECT 1 FROM schema_migrations WHERE version=?", (SCHEMA_VERSION,)
+            ).fetchone() is None
+        if needs_pdf_source_removal:
+            self.remove_pdf_source_data()
+            with self.connect() as con:
+                con.execute(
+                    "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (?, ?)",
+                    (SCHEMA_VERSION, now()),
+                )
 
     def source_exists(self, sha256: str) -> bool:
         with self.connect() as con:
@@ -280,6 +288,16 @@ class Database:
             raise RuntimeError("数据库结构迁移备份校验失败。")
         return target
 
+    def _backup_before_pdf_source_removal(self) -> Path:
+        backups = self.path.parent.parent / "exports" / "backups" / "schema"
+        backups.mkdir(parents=True, exist_ok=True)
+        target = backups / f"{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}-pdf-source-removal.sqlite3"
+        shutil.copy2(self.path, target)
+        if self._sha256(self.path) != self._sha256(target):
+            target.unlink(missing_ok=True)
+            raise RuntimeError("PDF 来源数据移除备份校验失败。")
+        return target
+
     @staticmethod
     def _has_column(con: sqlite3.Connection, table: str, column: str) -> bool:
         return any(row[1] == column for row in con.execute(f"PRAGMA table_info({table})"))
@@ -346,6 +364,57 @@ class Database:
     def rebuild(self) -> None:
         self.path.unlink(missing_ok=True)
         self.initialize()
+
+    def remove_pdf_source_data(self) -> dict[str, int]:
+        with self.connect() as con:
+            pdf_source_exists = con.execute(
+                "SELECT 1 FROM source_files WHERE source_type='deutsche_bank_pdf'"
+            ).fetchone() is not None
+        if not pdf_source_exists:
+            return {"source_files_removed": 0, "transactions_removed": 0}
+
+        self._backup_before_pdf_source_removal()
+        with self.connect() as con:
+            source_ids = [
+                row["id"] for row in con.execute(
+                    "SELECT id FROM source_files WHERE source_type='deutsche_bank_pdf'"
+                )
+            ]
+            if not source_ids:
+                return {"source_files_removed": 0, "transactions_removed": 0}
+            placeholders = ",".join("?" for _ in source_ids)
+            transaction_ids = [
+                row["id"] for row in con.execute(
+                    f"SELECT id FROM transactions WHERE source_file_id IN ({placeholders})", source_ids
+                )
+            ]
+            if transaction_ids:
+                transaction_placeholders = ",".join("?" for _ in transaction_ids)
+                con.execute(
+                    f"DELETE FROM reconciliations WHERE left_transaction_id IN ({transaction_placeholders}) "
+                    f"OR right_transaction_id IN ({transaction_placeholders})",
+                    transaction_ids * 2,
+                )
+                con.execute(
+                    f"DELETE FROM audit_log WHERE transaction_id IN ({transaction_placeholders})", transaction_ids
+                )
+                con.execute(
+                    f"DELETE FROM transactions WHERE id IN ({transaction_placeholders})", transaction_ids
+                )
+            con.execute(f"DELETE FROM import_batches WHERE source_file_id IN ({placeholders})", source_ids)
+            con.execute(f"DELETE FROM source_files WHERE id IN ({placeholders})", source_ids)
+            result = {"source_files_removed": len(source_ids), "transactions_removed": len(transaction_ids)}
+            con.execute(
+                "INSERT INTO audit_log(transaction_id,action,before_json,after_json,note,created_at) VALUES(NULL,?,?,?,?,?)",
+                (
+                    "remove_pdf_source_data",
+                    json.dumps({"source_type": "deutsche_bank_pdf"}),
+                    json.dumps(result),
+                    "csv_only_migration",
+                    now(),
+                ),
+            )
+            return result
 
     def transaction_rows(self, include_excluded: bool = True, filters: dict | None = None) -> list[sqlite3.Row]:
         clauses: list[str] = []
@@ -497,29 +566,6 @@ class Database:
                 "INSERT INTO audit_log(transaction_id,action,before_json,after_json,note,created_at) VALUES(?,?,?,?,?,?)",
                 (transaction_id, "category_override", json.dumps(dict(before)), json.dumps({"category_id": category_id}), note, now()),
             )
-
-    def reconcile_paypal(self) -> dict[str, int]:
-        automatic = suggested = 0
-        with self.connect() as con:
-            paypal_rows = con.execute(
-                """SELECT t.* FROM transactions t JOIN source_files s ON s.id=t.source_file_id
-                WHERE s.source_type='paypal_csv' AND t.amount_cents != 0"""
-            ).fetchall()
-            bank_rows = con.execute(
-                """SELECT t.* FROM transactions t JOIN source_files s ON s.id=t.source_file_id
-                WHERE s.source_type='deutsche_bank_pdf' AND t.amount_cents != 0"""
-            ).fetchall()
-            for match in reconcile_paypal_rows([dict(row) for row in paypal_rows], [dict(row) for row in bank_rows]):
-                con.execute(
-                    "INSERT OR IGNORE INTO reconciliations(left_transaction_id,right_transaction_id,kind,reason,confidence,status) VALUES(?,?,?,?,?,?)",
-                    (match["paypal_id"], match["bank_id"], "paypal_bank", match["reason"], match["confidence"], match["status"]),
-                )
-                if match["status"] == "automatic":
-                    con.execute("UPDATE transactions SET excluded_reason='paypal_matched' WHERE id=? AND excluded_reason=''", (match["bank_id"],))
-                    automatic += 1
-                else:
-                    suggested += 1
-        return {"automatic": automatic, "suggested": suggested}
 
     def reconcile_refunds(self) -> dict[str, int]:
         automatic = suggested = 0

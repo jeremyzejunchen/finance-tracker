@@ -226,7 +226,6 @@ class FinanceService:
             self.previews.pop(str(item["token"]), None)
             results.append({"token": item["token"], "ok": True, **result})
         if any(not result["duplicate_source"] for result in written):
-            self.db.reconcile_paypal()
             self.db.reconcile_refunds()
         return {"results": results, "baseline": baseline}
 
@@ -239,7 +238,6 @@ class FinanceService:
         mark_refund_pairs(prepared)
         result = self.db.write_import({"path": source_path, "filename": preview.filename, "source_type": preview.source_type, "sha256": preview.file_hash}, prepared)
         if not result["duplicate_source"]:
-            result["paypal_matching"] = self.db.reconcile_paypal()
             result["refund_matching"] = self.db.reconcile_refunds()
         return result
 

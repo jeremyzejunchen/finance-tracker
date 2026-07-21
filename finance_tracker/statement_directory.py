@@ -24,7 +24,7 @@ class StatementDirectoryScanner:
             return []
         files: list[StatementFile] = []
         for path in sorted(self.root.rglob("*")):
-            if not path.is_file() or path.suffix.lower() not in {".pdf", ".csv"}:
+            if not path.is_file() or path.suffix.lower() != ".csv":
                 continue
             sha256 = self._sha256(path)
             account = self._account_for(path)
@@ -35,7 +35,7 @@ class StatementDirectoryScanner:
     @staticmethod
     def _account_for(path: Path) -> str:
         name = path.name.casefold()
-        if path.suffix.lower() == ".pdf" or name.endswith("-czj.csv"):
+        if name.endswith("-czj.csv"):
             return "ME"
         if name.endswith("-cr.csv"):
             return "WIFE"
