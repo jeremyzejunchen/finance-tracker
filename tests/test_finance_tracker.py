@@ -371,7 +371,17 @@ class FinanceTrackerTests(unittest.TestCase):
         self.assertEqual("SYNTHETIC MARKET", transactions[0].merchant_normalized)
         self.assertEqual("ME", transactions[0].account)
         self.assertEqual("kontoumsaetze:0", transactions[0].source_record_key)
-        self.assertFalse(any("iban" in key.lower() or "bic" in key.lower() or "referenz" in key.lower() for key in transactions[0].raw))
+        self.assertEqual(
+            {"booking_date", "value_date", "amount", "currency", "transaction_type"},
+            set(transactions[0].raw),
+        )
+        self.assertFalse(
+            any(
+                token in key.casefold()
+                for key in transactions[0].raw
+                for token in ("iban", "bic", "referenz", "kunden", "mandat", "gläubiger", "creditor")
+            )
+        )
 
     def test_kontoumsaetze_rejects_missing_header_and_preview_forces_me_account(self):
         with self.assertRaisesRegex(ImportErrorForUser, "Kontoumsaetze"):
