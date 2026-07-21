@@ -13,6 +13,7 @@ const kontoumsaetzePath = join(statementsRoot, "Kontoumsaetze_synthetic-czj.csv"
 const wifePath = join(statementsRoot, "synthetic-cr.csv");
 const pdfPath = join(statementsRoot, "synthetic.pdf");
 const playwrightWrapperPath = join(tempRoot, "playwright.ps1");
+const playwrightCliPath = join(repoRoot, "node_modules", ".bin", "playwright-cli.cmd");
 const session = `kontoumsaetze-${process.pid}`;
 
 function command(args) {
@@ -79,7 +80,7 @@ async function main() {
   writeFileSync(pdfPath, "%PDF-synthetic", "utf8");
   writeFileSync(playwrightWrapperPath, `
 param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments)
-& npx --yes --package '@playwright/cli' playwright-cli --session $env:KONTOUMSAETZE_PLAYWRIGHT_SESSION @Arguments
+& '${playwrightCliPath.replaceAll("'", "''")}' --session $env:KONTOUMSAETZE_PLAYWRIGHT_SESSION @Arguments
 exit $LASTEXITCODE
 `, "utf8");
 

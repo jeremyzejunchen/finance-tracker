@@ -21,3 +21,4 @@ data/config.json
 data/uploads/
 exports/
 .pytest_cache/
+node_modules/

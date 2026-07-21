@@ -74,6 +74,10 @@ This script:
 
 Normal tests do not install dependencies and do not need network access.
 
+The browser regression uses the pinned Node dependency in `package-lock.json`.
+CI provisions it with `npm ci` before invoking `scripts\test.ps1`; local runs
+must do the same as an explicit setup step, not during test execution.
+
 ## Broken virtual environment
 
 Treat the environment as broken if any of the following is true:

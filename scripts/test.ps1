@@ -54,4 +54,5 @@ if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 
-exit 0
+node .\tests\test_kontoumsaetze_browser.mjs
+exit $LASTEXITCODE
