@@ -12,7 +12,7 @@ from finance_tracker.config import FinanceTrackerConfig, default_config_path
 from finance_tracker.db import Database
 from finance_tracker.domain import ParsedTransaction
 from finance_tracker.domain import ImportPreview
-from finance_tracker.importers import parse_deutsche_bank_text, parse_paypal_csv, parse_trade_republic_csv
+from finance_tracker.importers import ImportErrorForUser, parse_deutsche_bank_text, parse_file, parse_paypal_csv, parse_trade_republic_csv
 from finance_tracker.importers.deutsche_bank import FALLBACK_WARNING, MERCHANT_WARNING, UNKNOWN_MERCHANT
 from finance_tracker.reconciliation.paypal import reconcile_paypal_rows
 from finance_tracker.runtime import migrate_legacy_runtime_data, project_runtime_paths
@@ -354,6 +354,31 @@ class FinanceTrackerTests(unittest.TestCase):
         self.assertTrue(transactions[1].is_internal_transfer)
         self.assertFalse(transactions[2].is_internal_transfer)
         self.assertEqual("REAL IBAN MERCHANT", transactions[2].merchant_normalized)
+
+    def test_kontoumsaetze_csv_is_recognized_parsed_and_redacts_sensitive_raw_fields(self):
+        source_type, transactions, warnings = parse_file(
+            "Kontoumsaetze_synthetic-czj.csv", self._fixture_bytes("kontoumsaetze-czj.csv"), self.config
+        )
+
+        self.assertEqual("kontoumsaetze_csv", source_type)
+        self.assertFalse(warnings)
+        self.assertEqual(2, len(transactions))
+        self.assertEqual("2026-06-01", transactions[0].booking_date.isoformat())
+        self.assertEqual("2026-06-02", transactions[0].value_date.isoformat())
+        self.assertEqual("-12.34", str(transactions[0].amount))
+        self.assertEqual("EUR", transactions[0].currency)
+        self.assertEqual("Lastschrift", transactions[0].transaction_type)
+        self.assertEqual("SYNTHETIC MARKET", transactions[0].merchant_normalized)
+        self.assertEqual("ME", transactions[0].account)
+        self.assertEqual("kontoumsaetze:0", transactions[0].source_record_key)
+        self.assertFalse(any("iban" in key.lower() or "bic" in key.lower() or "referenz" in key.lower() for key in transactions[0].raw))
+
+    def test_kontoumsaetze_rejects_missing_header_and_preview_forces_me_account(self):
+        with self.assertRaisesRegex(ImportErrorForUser, "Kontoumsaetze"):
+            parse_file("Kontoumsaetze_bad-czj.csv", b"not a statement", self.config)
+
+        preview = self.service.preview("Kontoumsaetze_synthetic-czj.csv", self._fixture_bytes("kontoumsaetze-czj.csv"))
+        self.assertTrue(all(transaction.account == "ME" for transaction in preview.transactions))
 
     def test_batch_preview_blocks_non_eur_and_collects_baseline_diff(self):
         content = b"Date,Description,Currency,Gross,Name,Transaction ID,From Email Address\n01.06.2026,Payment,USD,-12.50,Shop,TX-1,me@example.invalid\n"
