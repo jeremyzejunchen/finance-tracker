@@ -30,7 +30,6 @@ The bootstrap script:
 - creates the environment with a stable CPython interpreter
 - installs the project in editable mode using `.venv-phase1\Scripts\python.exe -m pip`
 - runs `pip check`
-- verifies `import fitz`
 
 If the environment is corrupted, run:
 
@@ -57,9 +56,6 @@ This command reports:
 - `sys.prefix`
 - `sys.base_prefix`
 - `pip` version
-- `PyMuPDF` availability
-
-If `import fitz` fails, the environment is not ready for tests.
 
 ## Normal tests
 
@@ -84,7 +80,6 @@ Treat the environment as broken if any of the following is true:
 
 - `.venv-phase1\Scripts\python.exe` is missing
 - the interpreter path in `.venv-phase1\pyvenv.cfg` points to a deleted base Python
-- `doctor.ps1` cannot run `import fitz`
 - `pip check` fails after bootstrap
 
 If the environment is broken, recreate it instead of editing internal files.
@@ -100,7 +95,7 @@ Do not write test data to the real `%LOCALAPPDATA%\FinanceTracker`, the user pro
 
 ## Common failures
 
-- `environment`: broken venv, missing Python, missing `fitz`, wrong interpreter
+- `environment`: broken venv, missing Python, wrong interpreter
 - `sandbox`: blocked filesystem or command execution
 - `permission`: denied write or path access
 - `network`: attempted dependency download or remote access
@@ -122,4 +117,3 @@ WSL2 is a fallback, not the canonical environment.
 ## Why bootstrap and tests are separate
 
 Bootstrap is the only place where environment repair or dependency installation should happen. Normal tests assume the environment already exists and should not touch the network.
-

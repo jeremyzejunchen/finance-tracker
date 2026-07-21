@@ -1,6 +1,6 @@
 # Finance Tracker
 
-Offline personal finance import, normalization, and review for Deutsche Bank PDFs, PayPal CSVs, and Trade Republic CSVs.
+Offline personal finance import, normalization, and review for PayPal, Kontoumsaetze, and Trade Republic CSVs.
 
 Phase 1 scope:
 

@@ -213,9 +213,4 @@ if ($LASTEXITCODE -ne 0) {
     Fail "pip check failed"
 }
 
-& $installPython -c "import fitz; print(fitz.__version__)"
-if ($LASTEXITCODE -ne 0) {
-    Fail "import fitz failed after bootstrap"
-}
-
 exit 0

@@ -7,7 +7,7 @@ name = "finance-tracker"
 version = "0.1.0"
 description = "Offline personal finance import, cleaning, and reporting"
 requires-python = ">=3.11"
-dependencies = ["PyMuPDF>=1.24"]
+dependencies = []
 
 [tool.setuptools.packages.find]
 include = ["finance_tracker*"]

@@ -25,8 +25,6 @@ const auditSeverityOrder = ["blocker", "warning", "info"];
 const auditFindingPresentation = {
   DUPLICATE_SOURCE_FILE: ["重复的账单文件", "这个文件以前已经导入过，或者本次选择了内容完全相同的文件。"],
   DUPLICATE_EXTERNAL_ID: ["重复的交易编号", "同一来源中有多条交易使用了相同的外部交易编号。"],
-  PAYPAL_BANK_MATCH: ["发现 PayPal 与银行对应记录", "系统发现一条 PayPal 记录与一条 Deutsche Bank 记录可能属于同一笔实际交易。"],
-  PAYPAL_BANK_AMBIGUOUS: ["PayPal 与银行记录存在多个候选", "一条记录可能对应多条候选记录，系统无法安全地自动确定对应关系。"],
   UNSUPPORTED_CURRENCY: ["包含不支持的币种", "当前统一导入只允许 EUR 交易。"],
   IMPORT_ERROR: ["文件解析失败", "文件无法解析，请检查文件格式后重试。"],
   NO_TRANSACTIONS: ["未识别到交易", "文件中没有识别到可导入的交易。"],
@@ -164,8 +162,6 @@ function renderAuditFinding(finding, onFilter) {
   const detailParts = [];
   if (finding.code === "DUPLICATE_SOURCE_FILE") detailParts.push(`文件：${(details.filenames || []).join("、")}；出现 ${details.occurrence_count || 0} 次${details.exists_in_database ? "；数据库中已有相同文件" : ""}`);
   if (finding.code === "DUPLICATE_EXTERNAL_ID") detailParts.push(`来源：${details.source_type || "—"}；交易编号：${details.external_id || "—"}；出现 ${details.occurrence_count || 0} 次`);
-  if (finding.code === "PAYPAL_BANK_MATCH") detailParts.push(`金额：${details.canonical_amount || "—"} ${details.currency || ""}；PayPal：${details.paypal_booking_date || "—"}；银行：${details.bank_booking_date || "—"}；相差 ${details.date_difference_days ?? "—"} 天`);
-  if (finding.code === "PAYPAL_BANK_AMBIGUOUS") detailParts.push(`PayPal 记录 ${details.paypal_indexes?.length || 0} 条；银行记录 ${details.bank_indexes?.length || 0} 条；相关索引：${finding.transaction_indexes?.join("、") || "—"}`);
   if (finding.code === "TRANSACTION_WARNING" || finding.code === "PARSER_WARNING") detailParts.push(details.warning || finding.message || fallback);
   const indexes = Array.isArray(finding.transaction_indexes) ? finding.transaction_indexes : [];
   return `<article class="audit-finding audit-${escapeHtml(finding.severity)}"><h4>${escapeHtml(title)}</h4><p>${escapeHtml(body)}</p>${detailParts.length ? `<p class="label">${escapeHtml(detailParts.join(" "))}</p>` : ""}<p class="audit-code">代码：${escapeHtml(finding.code)}</p>${indexes.length ? `<button type="button" class="secondary audit-filter-button" data-audit-indexes="${escapeHtml(JSON.stringify(indexes))}">查看相关交易</button>` : ""}</article>`;
@@ -371,7 +367,7 @@ async function importPage() {
     <section class="panel">
       <p class="notice">可一次选择多个账单；文件只在本次导入中读取，不会复制或修改原文件。</p>
       <form id="import-form" class="form-row">
-        <label>账单文件<input name="statements" type="file" accept=".pdf,.csv" multiple required></label>
+        <label>账单文件<input name="statements" type="file" accept=".csv" multiple required></label>
         <label>来源路径（可选，仅用于审计）<input name="source_path" placeholder="例如 D:\\Statements"></label>
         <button>解析并预览</button>
       </form>
