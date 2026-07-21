@@ -12,6 +12,9 @@ from typing import Iterator
 from .categories import DEFAULT_CATEGORIES
 
 
+SCHEMA_VERSION = 5
+
+
 class Database:
     def __init__(self, path: Path):
         self.path = path
@@ -114,6 +117,16 @@ class Database:
                     con.execute(f"ALTER TABLE transactions ADD COLUMN {column} {definition}")
             for level1, level2, level3, bucket in DEFAULT_CATEGORIES:
                 con.execute("INSERT OR IGNORE INTO categories(level1,level2,level3,bucket) VALUES(?,?,?,?)", (level1, level2, level3, bucket))
+            needs_pdf_source_removal = con.execute(
+                "SELECT 1 FROM schema_migrations WHERE version=?", (SCHEMA_VERSION,)
+            ).fetchone() is None
+        if needs_pdf_source_removal:
+            self.remove_pdf_source_data()
+            with self.connect() as con:
+                con.execute(
+                    "INSERT OR IGNORE INTO schema_migrations(version, applied_at) VALUES (?, ?)",
+                    (SCHEMA_VERSION, now()),
+                )
 
     def source_exists(self, sha256: str) -> bool:
         with self.connect() as con:
@@ -268,10 +281,10 @@ class Database:
             raise RuntimeError("数据库结构迁移备份校验失败。")
         return target
 
-    def _backup_before_removed_source_data(self) -> Path:
+    def _backup_before_pdf_source_removal(self) -> Path:
         backups = self.path.parent.parent / "exports" / "backups" / "schema"
         backups.mkdir(parents=True, exist_ok=True)
-        target = backups / f"{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}-removed-source.sqlite3"
+        target = backups / f"{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}-pdf-source-removal.sqlite3"
         shutil.copy2(self.path, target)
         if self._sha256(self.path) != self._sha256(target):
             target.unlink(missing_ok=True)
@@ -344,6 +357,57 @@ class Database:
     def rebuild(self) -> None:
         self.path.unlink(missing_ok=True)
         self.initialize()
+
+    def remove_pdf_source_data(self) -> dict[str, int]:
+        with self.connect() as con:
+            pdf_source_exists = con.execute(
+                "SELECT 1 FROM source_files WHERE source_type='deutsche_bank_pdf'"
+            ).fetchone() is not None
+        if not pdf_source_exists:
+            return {"source_files_removed": 0, "transactions_removed": 0}
+
+        self._backup_before_pdf_source_removal()
+        with self.connect() as con:
+            source_ids = [
+                row["id"] for row in con.execute(
+                    "SELECT id FROM source_files WHERE source_type='deutsche_bank_pdf'"
+                )
+            ]
+            if not source_ids:
+                return {"source_files_removed": 0, "transactions_removed": 0}
+            placeholders = ",".join("?" for _ in source_ids)
+            transaction_ids = [
+                row["id"] for row in con.execute(
+                    f"SELECT id FROM transactions WHERE source_file_id IN ({placeholders})", source_ids
+                )
+            ]
+            if transaction_ids:
+                transaction_placeholders = ",".join("?" for _ in transaction_ids)
+                con.execute(
+                    f"DELETE FROM reconciliations WHERE left_transaction_id IN ({transaction_placeholders}) "
+                    f"OR right_transaction_id IN ({transaction_placeholders})",
+                    transaction_ids * 2,
+                )
+                con.execute(
+                    f"DELETE FROM audit_log WHERE transaction_id IN ({transaction_placeholders})", transaction_ids
+                )
+                con.execute(
+                    f"DELETE FROM transactions WHERE id IN ({transaction_placeholders})", transaction_ids
+                )
+            con.execute(f"DELETE FROM import_batches WHERE source_file_id IN ({placeholders})", source_ids)
+            con.execute(f"DELETE FROM source_files WHERE id IN ({placeholders})", source_ids)
+            result = {"source_files_removed": len(source_ids), "transactions_removed": len(transaction_ids)}
+            con.execute(
+                "INSERT INTO audit_log(transaction_id,action,before_json,after_json,note,created_at) VALUES(NULL,?,?,?,?,?)",
+                (
+                    "remove_pdf_source_data",
+                    json.dumps({"source_type": "deutsche_bank_pdf"}),
+                    json.dumps(result),
+                    "csv_only_migration",
+                    now(),
+                ),
+            )
+            return result
 
     def transaction_rows(self, include_excluded: bool = True, filters: dict | None = None) -> list[sqlite3.Row]:
         clauses: list[str] = []
