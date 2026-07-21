@@ -70,9 +70,6 @@ if ($LASTEXITCODE -ne 0) {
     Fail "Unable to query pip version from the virtual environment"
 }
 
-$fitzProbe = & $venvPython -c "import fitz; print(fitz.__version__)"
-$fitzOk = $LASTEXITCODE -eq 0
-
 Write-Host "PowerShell version: $($PSVersionTable.PSVersion)"
 Write-Host "Repository path: $repoRoot"
 Write-Host "Python interpreter: $($infoLines[0])"
@@ -80,11 +77,6 @@ Write-Host "Python version: $($infoLines[1])"
 Write-Host "sys.prefix: $($infoLines[2])"
 Write-Host "sys.base_prefix: $($infoLines[3])"
 Write-Host "pip: $pipVersion"
-if ($fitzOk) {
-    Write-Host "PyMuPDF: $fitzProbe"
-} else {
-    Write-Host "PyMuPDF: import fitz failed"
-}
 
 $pyvenvCfg = Join-Path $repoRoot ".venv-phase1\pyvenv.cfg"
 if (Test-Path -LiteralPath $pyvenvCfg) {
@@ -100,10 +92,6 @@ if (Test-Path -LiteralPath $pyvenvCfg) {
     if ($executableLine -and -not (Test-Path ($executableLine -replace "^executable = ", ""))) {
         Fail "The virtual environment points to a missing base interpreter: $executableLine"
     }
-}
-
-if (-not $fitzOk) {
-    Fail "PyMuPDF import failed inside .venv-phase1. The environment is not ready for tests."
 }
 
 exit 0

@@ -45,4 +45,14 @@ $env:PYTHONUTF8 = "1"
 $env:PYTHONIOENCODING = "utf-8"
 
 & $venvPython -m unittest discover -s tests -v
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
+}
+
+node .\tests\test_ui.mjs
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
+}
+
+node .\tests\test_kontoumsaetze_browser.mjs
 exit $LASTEXITCODE

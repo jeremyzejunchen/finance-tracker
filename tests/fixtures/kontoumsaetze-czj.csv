@@ -1,0 +1,10 @@
+﻿Synthetic account export
+Synthetic statement owner: SAMPLE ONLY
+Synthetic account identifier: INVALID
+Synthetic export range: 01.06.2026 - 30.06.2026
+Synthetic bank: EXAMPLE BANK
+Synthetic notice: no personal data
+Synthetic generated fixture
+Auftragskonto;Buchungstag;Valutadatum;Buchungstext;Verwendungszweck;Begünstigter / Auftraggeber;Kontonummer;BLZ;Betrag;Währung;Info;Kundenreferenz;Mandatsreferenz;Gläubiger ID;IBAN;BIC;End-to-End-Referenz;Kategorie
+SYNTHETIC ACCOUNT;01.06.2026;02.06.2026;Lastschrift;SYNTHETIC MARKET;SEPA-Lastschrift;INVALID ACCOUNT;INVALID BLZ;-12,34;EUR;SYNTHETIC INFO;INVALID CUSTOMER REF;INVALID MANDATE REF;INVALID CREDITOR;INVALID IBAN;INVALID BIC;INVALID E2E REF;SYNTHETIC
+SYNTHETIC ACCOUNT;03.06.2026;03.06.2026;Überweisung;SYNTHETIC DESCRIPTION;SYNTHETIC PAYEE;INVALID ACCOUNT;INVALID BLZ;45,67;EUR;SYNTHETIC INFO;INVALID CUSTOMER REF;INVALID MANDATE REF;INVALID CREDITOR;INVALID IBAN;INVALID BIC;INVALID E2E REF;SYNTHETIC

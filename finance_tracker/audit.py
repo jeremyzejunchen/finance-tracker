@@ -4,7 +4,6 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any, Iterable
 
-from .reconciliation.paypal import paypal_bank_date_difference
 
 
 @dataclass(slots=True)
@@ -49,16 +48,6 @@ def format_money(value: Decimal) -> str:
     if separator:
         fraction = fraction.rstrip("0")
     return f"{whole}.{fraction.ljust(2, '0')}"
-
-
-def preview_paypal_bank_candidate(paypal: AuditTransaction, bank: AuditTransaction) -> bool:
-    if paypal.unsupported_currency or bank.unsupported_currency:
-        return False
-    if paypal.currency.upper() != bank.currency.upper() or paypal.amount != bank.amount:
-        return False
-    if paypal_bank_date_difference({"booking_date": paypal.booking_date}, {"booking_date": bank.booking_date}) > 5:
-        return False
-    return "PAYPAL" in f"{bank.merchant} {bank.description}".upper()
 
 
 def build_audit(
@@ -128,57 +117,6 @@ def build_audit(
                 "UNSUPPORTED_CURRENCY", "blocker",
                 f"Transaction currency {currency} is not supported; only EUR can be confirmed.",
                 [item.index], {"currency": currency},
-            ))
-
-    paypal_items = [item for item in items if item.source_type == "paypal_csv"]
-    bank_items = [item for item in items if item.source_type == "deutsche_bank_pdf"]
-    relationships: list[tuple[AuditTransaction, AuditTransaction]] = [
-        (paypal, bank) for paypal in paypal_items for bank in bank_items
-        if preview_paypal_bank_candidate(paypal, bank)
-    ]
-    paypal_candidates: dict[int, list[int]] = {}
-    bank_candidates: dict[int, list[int]] = {}
-    for paypal, bank in relationships:
-        paypal_candidates.setdefault(paypal.index, []).append(bank.index)
-        bank_candidates.setdefault(bank.index, []).append(paypal.index)
-    ambiguous_edges = [edge for edge in relationships if len(paypal_candidates[edge[0].index]) > 1 or len(bank_candidates[edge[1].index]) > 1]
-    visited: set[int] = set()
-    for paypal, bank in sorted(ambiguous_edges, key=lambda edge: (edge[0].index, edge[1].index)):
-        if paypal.index in visited:
-            continue
-        component_paypal: set[int] = set()
-        component_bank: set[int] = set()
-        frontier = [paypal.index]
-        while frontier:
-            current_paypal = frontier.pop()
-            if current_paypal in component_paypal:
-                continue
-            component_paypal.add(current_paypal)
-            for bank_index in paypal_candidates.get(current_paypal, []):
-                component_bank.add(bank_index)
-                for paypal_index in bank_candidates.get(bank_index, []):
-                    if paypal_index not in component_paypal:
-                        frontier.append(paypal_index)
-        visited.update(component_paypal)
-        indexes = sorted(component_paypal | component_bank)
-        findings.append(AuditFinding(
-            "PAYPAL_BANK_AMBIGUOUS", "warning", "PayPal-to-bank overlap has multiple eligible candidates.", indexes,
-            {"paypal_indexes": sorted(component_paypal), "bank_indexes": sorted(component_bank),
-             "candidate_relationships": [{"paypal_index": left.index, "bank_index": right.index} for left, right in sorted(ambiguous_edges, key=lambda edge: (edge[0].index, edge[1].index)) if left.index in component_paypal and right.index in component_bank],
-             "reason": "mutual uniqueness is not satisfied"},
-        ))
-    for paypal, bank in sorted(relationships, key=lambda edge: (edge[0].index, edge[1].index)):
-        if len(paypal_candidates[paypal.index]) == 1 and len(bank_candidates[bank.index]) == 1:
-            days = paypal_bank_date_difference(
-                {"booking_date": paypal.booking_date}, {"booking_date": bank.booking_date}
-            )
-            findings.append(AuditFinding(
-                "PAYPAL_BANK_MATCH", "info", "PayPal and Deutsche Bank transactions are a mutually unique overlap.",
-                [paypal.index, bank.index],
-                {"paypal_index": paypal.index, "bank_index": bank.index, "canonical_amount": format_money(paypal.amount),
-                 "currency": paypal.currency.upper(), "paypal_booking_date": paypal.booking_date,
-                 "bank_booking_date": bank.booking_date, "date_difference_days": days,
-                 "reason": "exact amount, currency, bank PayPal text, and mutually unique five-day candidate"},
             ))
 
     for warning in parser_warnings:

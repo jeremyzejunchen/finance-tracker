@@ -30,24 +30,24 @@ assert.equal(data.transactions[0].audit_index, undefined);
 assert.equal(ui.confirmationState({ audit: { can_confirm: false }, can_confirm: true }, false).blocked, true);
 assert.equal(ui.confirmationState({ audit: { can_confirm: false }, can_confirm: true }, false).checkboxDisabled, true);
 assert.equal(ui.confirmationState({ audit: { can_confirm: true } }, false).buttonDisabled, true);
-const duplicateFindings = [{ code: "DUPLICATE_SOURCE_FILE", details: { filenames: ["a.pdf", "b.pdf"] } }];
-assert.deepEqual(Array.from(ui.normalizedFilenameGroup("b.pdf,    a.pdf")), ["a.pdf", "b.pdf"]);
-assert.equal(ui.legacyBlockerCoveredByAudit({ filename: "a.pdf, b.pdf" }, duplicateFindings), true);
-assert.equal(ui.legacyBlockerCoveredByAudit({ filename: "a.pdf" }, duplicateFindings), false);
-assert.equal(ui.legacyBlockerCoveredByAudit({ filename: "a.pdf, b.pdf" }, [{ code: "DUPLICATE_SOURCE_FILE", details: { filenames: ["c.pdf", "d.pdf"] } }]), false);
-assert.equal(ui.legacyBlockerCoveredByAudit({ filename: "a.pdf" }, [{ code: "DUPLICATE_SOURCE_FILE", details: { filenames: ["a.pdf"] } }]), true);
+const duplicateFindings = [{ code: "DUPLICATE_SOURCE_FILE", details: { filenames: ["a.csv", "b.csv"] } }];
+assert.deepEqual(Array.from(ui.normalizedFilenameGroup("b.csv,    a.csv")), ["a.csv", "b.csv"]);
+assert.equal(ui.legacyBlockerCoveredByAudit({ filename: "a.csv, b.csv" }, duplicateFindings), true);
+assert.equal(ui.legacyBlockerCoveredByAudit({ filename: "a.csv" }, duplicateFindings), false);
+assert.equal(ui.legacyBlockerCoveredByAudit({ filename: "a.csv, b.csv" }, [{ code: "DUPLICATE_SOURCE_FILE", details: { filenames: ["c.csv", "d.csv"] } }]), false);
+assert.equal(ui.legacyBlockerCoveredByAudit({ filename: "a.csv" }, [{ code: "DUPLICATE_SOURCE_FILE", details: { filenames: ["a.csv"] } }]), true);
 const multipleDuplicateFindings = [
   ...duplicateFindings,
-  { code: "DUPLICATE_SOURCE_FILE", details: { filenames: ["c.pdf", "d.pdf"] } },
+  { code: "DUPLICATE_SOURCE_FILE", details: { filenames: ["c.csv", "d.csv"] } },
 ];
 const displayedBlockers = ui.legacyBlockersForDisplay({ audit: { findings: multipleDuplicateFindings }, blockers: [
-  { filename: "b.pdf, a.pdf", error: "duplicate" },
-  { filename: "d.pdf, c.pdf", error: "duplicate" },
-  { filename: "a.pdf", error: "partial" },
-  { filename: "other.pdf", error: "unrelated" },
+  { filename: "b.csv, a.csv", error: "duplicate" },
+  { filename: "d.csv, c.csv", error: "duplicate" },
+  { filename: "a.csv", error: "partial" },
+  { filename: "other.csv", error: "unrelated" },
 ] });
-assert.deepEqual(Array.from(displayedBlockers).map(item => item.filename), ["a.pdf", "other.pdf"]);
-assert.equal(ui.legacyBlockersForDisplay({ blockers: [{ filename: "a.pdf, b.pdf", error: "legacy" }] }).length, 1);
+assert.deepEqual(Array.from(displayedBlockers).map(item => item.filename), ["a.csv", "other.csv"]);
+assert.equal(ui.legacyBlockersForDisplay({ blockers: [{ filename: "a.csv, b.csv", error: "legacy" }] }).length, 1);
 assert.equal(ui.legacyBlockersForDisplay({ audit: { findings: [{ code: "DUPLICATE_EXTERNAL_ID", details: {} }] }, blockers: [{ filename: "", error: "批次内存在重复 external ID" }] }).length, 0);
 
 console.log("UI logic tests: 8 assertions passed");
