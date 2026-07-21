@@ -180,6 +180,23 @@ class FinanceTrackerTests(unittest.TestCase):
             )
         )
 
+    def test_legacy_fx_rule_applies_to_kontoumsaetze_csv(self):
+        config = FinanceTrackerConfig(currency_exchange_rules=[{
+            "name": "Legacy FX rule",
+            "source_types": ["deutsche_bank_pdf"],
+            "contains_all": ["marker a", "marker b"],
+        }])
+        service = FinanceService(self.db, config)
+        transaction = ParsedTransaction(
+            booking_date=date(2026, 6, 1), amount=Decimal("100.00"), currency="EUR",
+            merchant_raw="FX", merchant_normalized="FX", description_raw="marker a / marker b",
+        )
+
+        prepared = service._prepare(transaction, "kontoumsaetze_csv")
+
+        self.assertEqual("currency_exchange", prepared["transaction_kind"])
+        self.assertEqual("currency_exchange", prepared["excluded_reason"])
+
     def test_parse_file_rejects_pdf_with_csv_only_error(self):
         with self.assertRaisesRegex(ImportErrorForUser, "CSV"):
             parse_file("old.PDF", b"synthetic", self.config)
