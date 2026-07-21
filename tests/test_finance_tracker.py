@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import sqlite3
 import tempfile
 import unittest
 from datetime import date
@@ -972,6 +973,95 @@ class FinanceTrackerTests(unittest.TestCase):
             self.assertIn("category_status", [row[1] for row in con.execute("PRAGMA table_info(transactions)")])
         finally:
             con.close()
+
+    def test_remove_pdf_source_data_is_atomic_and_idempotent(self):
+        self._use_project_database()
+        pdf = self.service._prepare(
+            self._db_statement_transaction(source_record_key="pdf-removal"), "deutsche_bank_pdf"
+        )
+        paypal = self.service._prepare(
+            self._db_statement_transaction(source_record_key="paypal-removal"), "paypal_csv"
+        )
+        trade_republic = self.service._prepare(
+            self._db_statement_transaction(source_record_key="trade-removal"), "trade_republic_csv"
+        )
+        self.db.write_import_batch([
+            ({"path": "", "filename": "legacy.pdf", "source_type": "deutsche_bank_pdf", "sha256": "pdf-removal"}, [pdf]),
+            ({"path": "", "filename": "paypal.csv", "source_type": "paypal_csv", "sha256": "paypal-removal"}, [paypal]),
+            ({"path": "", "filename": "trade.csv", "source_type": "trade_republic_csv", "sha256": "trade-removal"}, [trade_republic]),
+        ])
+        pdf_id = self.db.transaction_rows(filters={"source": "deutsche_bank_pdf"})[0]["id"]
+        paypal_id = self.db.transaction_rows(filters={"source": "paypal_csv"})[0]["id"]
+        with self.db.connect() as con:
+            con.execute(
+                "INSERT INTO reconciliations(left_transaction_id,right_transaction_id,kind,confidence) VALUES(?,?,?,?)",
+                (pdf_id, paypal_id, "synthetic", 1.0),
+            )
+            con.execute(
+                "INSERT INTO audit_log(transaction_id,action,created_at) VALUES(?,?,?)",
+                (pdf_id, "synthetic", "2026-01-01T00:00:00+00:00"),
+            )
+
+        result = self.db.remove_pdf_source_data()
+
+        self.assertEqual({"source_files_removed": 1, "transactions_removed": 1}, result)
+        self.assertEqual(0, self._source_count("deutsche_bank_pdf"))
+        self.assertEqual(1, self._source_count("paypal_csv"))
+        self.assertEqual(1, self._source_count("trade_republic_csv"))
+        self.assertEqual(2, self.db.table_count("import_batches"))
+        self.assertEqual(0, self.db.table_count("reconciliations"))
+        self.assertEqual(1, self.db.audit_count("remove_pdf_source_data"))
+        self.assertEqual(
+            {"source_files_removed": 0, "transactions_removed": 0}, self.db.remove_pdf_source_data()
+        )
+        self.assertEqual(1, self.db.audit_count("remove_pdf_source_data"))
+        self.assertEqual(1, len(list((Path(self.directory.name) / "project" / "exports" / "backups" / "schema").glob("*-pdf-source-removal.sqlite3"))))
+
+    def test_remove_pdf_source_data_rolls_back_when_a_foreign_key_dependent_delete_fails(self):
+        self._use_project_database()
+        pdf = self.service._prepare(
+            self._db_statement_transaction(source_record_key="pdf-rollback"), "deutsche_bank_pdf"
+        )
+        self.db.write_import(
+            {"path": "", "filename": "legacy.pdf", "source_type": "deutsche_bank_pdf", "sha256": "pdf-rollback"}, [pdf]
+        )
+        with self.db.connect() as con:
+            con.execute(
+                "CREATE TRIGGER fail_pdf_transaction_removal BEFORE DELETE ON transactions "
+                "BEGIN SELECT RAISE(ABORT, 'synthetic removal failure'); END"
+            )
+
+        with self.assertRaises(sqlite3.DatabaseError):
+            self.db.remove_pdf_source_data()
+
+        self.assertEqual(1, self._source_count("deutsche_bank_pdf"))
+        self.assertEqual(1, self.db.table_count("transactions"))
+        self.assertEqual(0, self.db.audit_count("remove_pdf_source_data"))
+
+    def test_initialize_runs_pdf_source_removal_migration_once(self):
+        self._use_project_database()
+        pdf = self.service._prepare(
+            self._db_statement_transaction(source_record_key="startup-removal"), "deutsche_bank_pdf"
+        )
+        self.db.write_import(
+            {"path": "", "filename": "legacy.pdf", "source_type": "deutsche_bank_pdf", "sha256": "startup-removal"}, [pdf]
+        )
+        with self.db.connect() as con:
+            con.execute("DELETE FROM schema_migrations WHERE version=5")
+
+        Database(self.db.path).initialize()
+
+        self.assertEqual(0, self._source_count("deutsche_bank_pdf"))
+        self.assertEqual(1, self.db.audit_count("remove_pdf_source_data"))
+
+    def _source_count(self, source_type: str) -> int:
+        with self.db.connect() as con:
+            return con.execute("SELECT COUNT(*) FROM source_files WHERE source_type=?", (source_type,)).fetchone()[0]
+
+    def _use_project_database(self) -> None:
+        self.db = Database(Path(self.directory.name) / "project" / "data" / "finance.sqlite3")
+        self.db.initialize()
+        self.service = FinanceService(self.db, self.config)
 
     def test_merchant_resolver_prefers_exact_alias_over_contains_alias(self):
         from finance_tracker.merchant_rules import MerchantResolver, MerchantRule
