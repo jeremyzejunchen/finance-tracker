@@ -1,10 +1,10 @@
-# Legacy value_date Migration Implementation Plan
+# Legacy transaction-write-column Migration Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Safely upgrade historical SQLite ledgers missing `transactions.value_date` so CSV confirmation can write transactions.
+**Goal:** Safely upgrade historical SQLite ledgers missing current transaction-write columns so CSV confirmation can write transactions.
 
-**Architecture:** Reuse `Database.initialize()` and its existing verified pre-migration backup. Extend the existing missing-transaction-column check and migration map by one defaulted column, then prove the real confirmation path succeeds against a synthetic legacy database.
+**Architecture:** Reuse `Database.initialize()` and its existing verified pre-migration backup. Extend the explicit missing-transaction-column map with only current write-path columns that have safe defaults, then prove the real confirmation path succeeds against a synthetic historical schema.
 
 **Tech Stack:** Python 3.14, SQLite, unittest, existing local Playwright CLI.
 
@@ -17,7 +17,7 @@
 
 ---
 
-### Task 1: Add the legacy column migration regression and minimal implementation
+### Task 1: Add the legacy column migration regression and implementation
 
 **Files:**
 - Modify: `tests/test_finance_tracker.py`
@@ -26,38 +26,44 @@
 
 **Interfaces:**
 - Consumes: `Database.initialize()` and `FinanceService.confirm_many(items)`.
-- Produces: a database whose `transactions` table always has `value_date` before imports run.
+- Produces: a database whose `transactions` table has every current confirmation-write column before imports run.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
-Create a project-scoped synthetic SQLite database with a legacy `transactions` table that omits `value_date`, initialize it, then confirm one synthetic `ParsedTransaction` through `FinanceService.confirm_many()`.
+Create a project-scoped synthetic SQLite database with a legacy `transactions` table that omits all current confirmation-write columns, initialize it, then write one synthetic prepared transaction.
 
 ```python
 database.initialize()
-self.assertIn("value_date", transaction_columns(database_path))
-result = service.confirm_many([{"token": preview.token}])
-self.assertEqual(1, result["results"][0]["inserted"])
+self.assertTrue(required_columns.issubset(transaction_columns(database_path)))
+result = database.write_import(source, [prepared])
+self.assertEqual(1, result["inserted"])
 ```
 
-- [ ] **Step 2: Run the focused test and verify it fails**
+- [x] **Step 2: Run the focused test and verify it fails**
 
 Run:
 
 ```powershell
-.\.venv-phase1\Scripts\python.exe -m unittest tests.test_finance_tracker.FinanceTrackerTests.test_existing_database_schema_upgrade_creates_project_backup -v
+.\.venv-phase1\Scripts\python.exe -m unittest tests.test_finance_tracker.FinanceTrackerTests.test_schema_upgrade_recovers_all_current_import_columns -v
 ```
 
-Expected before the implementation: an assertion failure because `value_date` is absent.
+Expected before the implementation: SQLite rejects the synthetic write because a current write column is absent.
 
-- [ ] **Step 3: Implement the minimal migration**
+- [x] **Step 3: Implement the explicit compatibility migration**
 
-Add the following entry to the existing `missing_columns` map in `Database.initialize()` and include `value_date` in `_needs_transaction_columns()`:
+Add the confirmed missing-column definitions to the existing `missing_columns` map in `Database.initialize()` and include the same names in `_needs_transaction_columns()`:
 
 ```python
-"value_date": "TEXT NOT NULL DEFAULT ''",
+"merchant_raw": "TEXT NOT NULL DEFAULT ''",
+"transaction_type": "TEXT NOT NULL DEFAULT ''",
+"source_format": "TEXT NOT NULL DEFAULT ''",
+"source_record_index": "INTEGER NOT NULL DEFAULT 0",
+"source_record_key": "TEXT NOT NULL DEFAULT ''",
+"is_internal_transfer": "INTEGER NOT NULL DEFAULT 0",
+"is_failed_transaction": "INTEGER NOT NULL DEFAULT 0",
 ```
 
-- [ ] **Step 4: Run focused and complete verification**
+- [x] **Step 4: Run focused and complete verification**
 
 Run:
 

@@ -732,6 +732,37 @@ class FinanceTrackerTests(unittest.TestCase):
         finally:
             con.close()
 
+    def test_schema_upgrade_recovers_all_current_import_columns(self):
+        project_root = Path(self.directory.name) / "project"
+        database_path = project_root / "data" / "finance_tracker.sqlite3"
+        database = Database(database_path)
+        database.initialize()
+        missing_columns = (
+            "merchant_raw", "transaction_type", "source_format", "source_record_index",
+            "source_record_key", "is_internal_transfer", "is_failed_transaction",
+        )
+        with database.connect() as con:
+            for column in missing_columns:
+                con.execute(f"ALTER TABLE transactions DROP COLUMN {column}")
+
+        database.initialize()
+        service = FinanceService(database, self.config)
+        transaction = ParsedTransaction(
+            booking_date=date(2026, 6, 1), value_date=date(2026, 6, 1), amount=Decimal("-1.00"),
+            currency="EUR", merchant_raw="SYNTHETIC MARKET", merchant_normalized="SYNTHETIC MARKET",
+            description_raw="Synthetic legacy migration regression", account="ME", source_format="synthetic",
+            source_record_key="legacy-schema-regression",
+        )
+        result = database.write_import(
+            {"path": "", "filename": "synthetic.csv", "source_type": "synthetic", "sha256": "legacy-schema-regression"},
+            [service._prepare(transaction, "synthetic")],
+        )
+
+        self.assertEqual(1, result["inserted"])
+        with database.connect() as con:
+            columns = {row[1] for row in con.execute("PRAGMA table_info(transactions)")}
+        self.assertTrue(set(missing_columns).issubset(columns))
+
     def test_remove_pdf_source_data_is_atomic_and_idempotent(self):
         self._use_project_database()
         pdf = self.service._prepare(
