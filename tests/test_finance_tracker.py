@@ -763,6 +763,21 @@ class FinanceTrackerTests(unittest.TestCase):
             columns = {row[1] for row in con.execute("PRAGMA table_info(transactions)")}
         self.assertTrue(set(missing_columns).issubset(columns))
 
+    def test_schema_upgrade_recovers_reconciliation_write_columns(self):
+        with self.db.connect() as con:
+            con.execute("ALTER TABLE reconciliations DROP COLUMN reason")
+            con.execute("ALTER TABLE reconciliations DROP COLUMN status")
+
+        self.db.initialize()
+        debit = b"Date,Description,Currency,Gross,Name,Transaction ID,From Email Address\n01.06.2026,Express Checkout Payment,EUR,-18.00,Legacy Reconciliation Shop,LR-1,me@example.invalid\n"
+        credit = b"Date,Description,Currency,Gross,Name,Transaction ID,From Email Address\n03.06.2026,Payment Refund,EUR,18.00,Legacy Reconciliation Shop,LR-2,me@example.invalid\n"
+        self.service.confirm(self.service.preview("debit.csv", debit).token)
+        self.service.confirm(self.service.preview("credit.csv", credit).token)
+
+        reconciliation = next(row for row in self.db.reconciliation_rows() if row["kind"] == "refund_pair")
+        self.assertEqual("refund_amount_date_merchant_match", reconciliation["reason"])
+        self.assertEqual("automatic", reconciliation["status"])
+
     def test_remove_pdf_source_data_is_atomic_and_idempotent(self):
         self._use_project_database()
         pdf = self.service._prepare(

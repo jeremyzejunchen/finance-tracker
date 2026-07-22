@@ -35,7 +35,7 @@ class Database:
             con.close()
 
     def initialize(self) -> None:
-        if self._needs_transaction_columns():
+        if self._needs_schema_columns():
             self._backup_before_schema_change()
         with self.connect() as con:
             con.executescript(
@@ -130,6 +130,13 @@ class Database:
             for column, definition in missing_columns.items():
                 if not self._has_column(con, "transactions", column):
                     con.execute(f"ALTER TABLE transactions ADD COLUMN {column} {definition}")
+            missing_reconciliation_columns = {
+                "reason": "TEXT NOT NULL DEFAULT ''",
+                "status": "TEXT NOT NULL DEFAULT 'suggested'",
+            }
+            for column, definition in missing_reconciliation_columns.items():
+                if not self._has_column(con, "reconciliations", column):
+                    con.execute(f"ALTER TABLE reconciliations ADD COLUMN {column} {definition}")
             for level1, level2, level3, bucket in DEFAULT_CATEGORIES:
                 con.execute("INSERT OR IGNORE INTO categories(level1,level2,level3,bucket) VALUES(?,?,?,?)", (level1, level2, level3, bucket))
             needs_pdf_source_removal = con.execute(
@@ -274,12 +281,12 @@ class Database:
         con.execute("INSERT OR IGNORE INTO canonical_merchants(name,source) VALUES(?,?)", (name.strip(), source))
         return con.execute("SELECT id FROM canonical_merchants WHERE name=?", (name.strip(),)).fetchone()["id"]
 
-    def _needs_transaction_columns(self) -> bool:
+    def _needs_schema_columns(self) -> bool:
         if not self.path.is_file() or self.path.stat().st_size == 0:
             return False
         con = sqlite3.connect(self.path)
         try:
-            return self._has_column(con, "transactions", "id") and any(
+            transactions_need_upgrade = self._has_column(con, "transactions", "id") and any(
                 not self._has_column(con, "transactions", column)
                 for column in (
                     "category_status", "canonical_merchant_id", "value_date", "merchant_raw",
@@ -287,6 +294,11 @@ class Database:
                     "is_internal_transfer", "is_failed_transaction",
                 )
             )
+            reconciliations_need_upgrade = self._has_column(con, "reconciliations", "id") and any(
+                not self._has_column(con, "reconciliations", column)
+                for column in ("reason", "status")
+            )
+            return transactions_need_upgrade or reconciliations_need_upgrade
         finally:
             con.close()
 

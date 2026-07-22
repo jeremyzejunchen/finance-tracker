@@ -4,7 +4,7 @@
 
 **Goal:** Safely upgrade historical SQLite ledgers missing current transaction-write columns so CSV confirmation can write transactions.
 
-**Architecture:** Reuse `Database.initialize()` and its existing verified pre-migration backup. Extend the explicit missing-transaction-column map with only current write-path columns that have safe defaults, then prove the real confirmation path succeeds against a synthetic historical schema.
+**Architecture:** Reuse `Database.initialize()` and its existing verified pre-migration backup. Extend the explicit missing-column maps for `transactions` and `reconciliations` with only current write-path columns that have safe defaults, then prove the real confirmation path succeeds against a synthetic historical schema.
 
 **Tech Stack:** Python 3.14, SQLite, unittest, existing local Playwright CLI.
 
@@ -26,11 +26,11 @@
 
 **Interfaces:**
 - Consumes: `Database.initialize()` and `FinanceService.confirm_many(items)`.
-- Produces: a database whose `transactions` table has every current confirmation-write column before imports run.
+- Produces: a database whose transaction and reconciliation tables have every current confirmation-write column before imports run.
 
 - [x] **Step 1: Write the failing test**
 
-Create a project-scoped synthetic SQLite database with a legacy `transactions` table that omits all current confirmation-write columns, initialize it, then write one synthetic prepared transaction.
+Create a project-scoped synthetic SQLite database with legacy transaction or reconciliation tables that omit current confirmation-write columns, initialize it, then complete the matching write path.
 
 ```python
 database.initialize()
@@ -51,7 +51,7 @@ Expected before the implementation: SQLite rejects the synthetic write because a
 
 - [x] **Step 3: Implement the explicit compatibility migration**
 
-Add the confirmed missing-column definitions to the existing `missing_columns` map in `Database.initialize()` and include the same names in `_needs_transaction_columns()`:
+Add the confirmed missing-column definitions to `Database.initialize()` and include the same names in its schema-upgrade check:
 
 ```python
 "merchant_raw": "TEXT NOT NULL DEFAULT ''",
@@ -62,6 +62,8 @@ Add the confirmed missing-column definitions to the existing `missing_columns` m
 "is_internal_transfer": "INTEGER NOT NULL DEFAULT 0",
 "is_failed_transaction": "INTEGER NOT NULL DEFAULT 0",
 ```
+
+Also add `reason TEXT NOT NULL DEFAULT ''` and `status TEXT NOT NULL DEFAULT 'suggested'` to the reconciliation migration map.
 
 - [x] **Step 4: Run focused and complete verification**
 
