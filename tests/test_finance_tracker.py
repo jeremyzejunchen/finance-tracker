@@ -721,12 +721,14 @@ class FinanceTrackerTests(unittest.TestCase):
         try:
             self.assertNotIn("canonical_merchant_id", [row[1] for row in con.execute("PRAGMA table_info(transactions)")])
             self.assertNotIn("category_status", [row[1] for row in con.execute("PRAGMA table_info(transactions)")])
+            self.assertNotIn("value_date", [row[1] for row in con.execute("PRAGMA table_info(transactions)")])
         finally:
             con.close()
         con = sqlite3.connect(database_path)
         try:
             self.assertIn("canonical_merchant_id", [row[1] for row in con.execute("PRAGMA table_info(transactions)")])
             self.assertIn("category_status", [row[1] for row in con.execute("PRAGMA table_info(transactions)")])
+            self.assertIn("value_date", [row[1] for row in con.execute("PRAGMA table_info(transactions)")])
         finally:
             con.close()
 

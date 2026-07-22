@@ -118,6 +118,7 @@ class Database:
             missing_columns = {
                 "category_status": "TEXT NOT NULL DEFAULT 'unclassified'",
                 "canonical_merchant_id": "INTEGER REFERENCES canonical_merchants(id)",
+                "value_date": "TEXT NOT NULL DEFAULT ''",
             }
             for column, definition in missing_columns.items():
                 if not self._has_column(con, "transactions", column):
@@ -273,7 +274,7 @@ class Database:
         try:
             return self._has_column(con, "transactions", "id") and any(
                 not self._has_column(con, "transactions", column)
-                for column in ("category_status", "canonical_merchant_id")
+                for column in ("category_status", "canonical_merchant_id", "value_date")
             )
         finally:
             con.close()
