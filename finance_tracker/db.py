@@ -621,14 +621,14 @@ class Database:
                 status = "automatic" if len(top) == 1 and top_score >= 0.9 else "suggested"
                 target = top[0][0]
                 reason = "refund_amount_date_merchant_match" if top_score >= 0.9 else "refund_amount_date_possible_match"
-                con.execute(
+                inserted = con.execute(
                     "INSERT OR IGNORE INTO reconciliations(left_transaction_id,right_transaction_id,kind,reason,confidence,status) VALUES(?,?,?,?,?,?)",
                     (min(left["id"], target["id"]), max(left["id"], target["id"]), "refund_pair", reason, top_score, status),
-                )
+                ).rowcount == 1
                 if status == "automatic":
                     con.execute("UPDATE transactions SET excluded_reason='matched_refund_pair' WHERE id IN (?,?) AND excluded_reason=''", (left["id"], target["id"]))
-                    automatic += 1
-                else:
+                    automatic += int(inserted)
+                elif inserted:
                     suggested += 1
         return {"automatic": automatic, "suggested": suggested}
 

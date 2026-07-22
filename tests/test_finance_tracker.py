@@ -610,6 +610,25 @@ class FinanceTrackerTests(unittest.TestCase):
         self.assertEqual("matched_refund_pair", rows["CB-1"])
         self.assertEqual("matched_refund_pair", rows["CB-2"])
 
+    def test_refund_reconciliation_counts_one_suggested_pair_once(self):
+        debit = ParsedTransaction(
+            booking_date=date(2026, 6, 1), value_date=date(2026, 6, 1), amount=Decimal("-18.00"),
+            currency="EUR", merchant_raw="Alphaone", merchant_normalized="Alphaone",
+            description_raw="Outbound only", account="ME", source_format="synthetic", source_record_key="suggestion-debit",
+        )
+        credit = ParsedTransaction(
+            booking_date=date(2026, 6, 3), value_date=date(2026, 6, 3), amount=Decimal("18.00"),
+            currency="EUR", merchant_raw="Betatwo", merchant_normalized="Betatwo",
+            description_raw="Inbound distinct", account="ME", source_format="synthetic", source_record_key="suggestion-credit",
+        )
+        self.db.write_import(
+            {"path": "", "filename": "suggestion.csv", "source_type": "synthetic", "sha256": "suggestion-pair"},
+            [self.service._prepare(debit, "synthetic"), self.service._prepare(credit, "synthetic")],
+        )
+
+        self.assertEqual({"automatic": 0, "suggested": 1}, self.db.reconcile_refunds())
+        self.assertEqual(1, self.db.table_count("reconciliations"))
+
     def test_batch_write_import_is_atomic_across_multiple_files(self):
         transactions = parse_paypal_csv(self._fixture_bytes("paypal_en.csv"), "paypal-me.csv", self.config)
         rows_a = [self.service._prepare(transactions[0], "paypal_csv")]
