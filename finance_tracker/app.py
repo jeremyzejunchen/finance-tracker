@@ -39,22 +39,40 @@ class AppHandler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = urlparse(self.path).path
-        if path.startswith("/static/"):
-            return self.serve_static(path.removeprefix("/static/"))
-        if path == "/api/report":
-            query = {key: value[-1] for key, value in parse_qs(urlparse(self.path).query).items()}
-            return self.json_response(self.finance.report(query))
-        if path == "/api/transactions":
-            return self.json_response([dict(row) for row in self.db.transaction_rows()])
-        if path == "/api/categories":
-            return self.json_response([dict(row) for row in self.db.category_rows()])
-        if path == "/api/rules":
-            return self.json_response([dict(row) for row in self.db.rule_rows()])
-        if path == "/api/import/scan":
-            return self.json_response({"files": self.finance.scan_statement_directory(self.statement_root)})
-        if path in ("/", "/import", "/transactions", "/review", "/categories"):
-            return self.html_response(render_page(path))
-        self.send_error(HTTPStatus.NOT_FOUND)
+        try:
+            if path.startswith("/static/"):
+                return self.serve_static(path.removeprefix("/static/"))
+            if path == "/api/report":
+                query = {key: value[-1] for key, value in parse_qs(urlparse(self.path).query).items()}
+                return self.json_response(self.finance.report(query))
+            if path == "/api/transactions":
+                return self.json_response([dict(row) for row in self.db.transaction_rows()])
+            if path == "/api/categories":
+                return self.json_response([dict(row) for row in self.db.category_rows()])
+            if path == "/api/rules":
+                return self.json_response([dict(row) for row in self.db.rule_rows()])
+            if path == "/api/import/scan":
+                return self.json_response({"files": self.finance.scan_statement_directory(self.statement_root)})
+            if path == "/api/merchant-review/groups":
+                return self.json_response([dict(row) for row in self.db.merchant_review_groups()])
+            if path == "/api/merchant-review/impact":
+                merchant, direction = self.merchant_review_key()
+                return self.json_response(self.finance.merchant_review_impact(merchant, direction))
+            if path == "/api/merchant-review/group":
+                merchant, direction = self.merchant_review_key()
+                rows = self.db.merchant_review_group(merchant, direction)
+                return self.json_response([{
+                    "id": row["id"],
+                    "booking_date": row["booking_date"],
+                    "amount_cents": row["amount_cents"],
+                    "account": row["account"],
+                    "category_id": row["category_id"],
+                } for row in rows])
+            if path in ("/", "/import", "/transactions", "/review", "/merchant-review", "/categories"):
+                return self.html_response(render_page(path))
+            self.send_error(HTTPStatus.NOT_FOUND)
+        except (ValueError, KeyError) as error:
+            self.json_response({"error": str(error)}, HTTPStatus.BAD_REQUEST)
 
     def do_POST(self):
         path = urlparse(self.path).path
@@ -82,6 +100,19 @@ class AppHandler(BaseHTTPRequestHandler):
                 body = self.json_body()
                 self.db.set_override(int(body["transaction_id"]), int(body["category_id"]), str(body.get("note", "")))
                 return self.json_response({"ok": True})
+            if path == "/api/merchant-review/apply":
+                body = self.json_body()
+                return self.json_response(self.finance.apply_merchant_review_rule(
+                    str(body["merchant"]), str(body["direction"]), int(body["category_id"])
+                ))
+            if path == "/api/merchant-review/skip":
+                body = self.json_body()
+                self.finance.skip_merchant_review_group(str(body["merchant"]), str(body["direction"]))
+                return self.json_response({"ok": True})
+            if path == "/api/merchant-review/override":
+                body = self.json_body()
+                self.db.set_override(int(body["transaction_id"]), int(body["category_id"]), str(body.get("note", "")))
+                return self.json_response({"ok": True})
             if path == "/api/categories":
                 body = self.json_body()
                 self.db.add_category(body["level1"], body["level2"], body["level3"], body["bucket"])
@@ -91,8 +122,18 @@ class AppHandler(BaseHTTPRequestHandler):
                 self.db.add_rule(body["pattern"], int(body["category_id"]), int(body.get("priority", 100)))
                 return self.json_response({"ok": True}, HTTPStatus.CREATED)
             self.send_error(HTTPStatus.NOT_FOUND)
-        except (ValueError, KeyError, ImportErrorForUser) as error:
+        except (ValueError, KeyError, TypeError, ImportErrorForUser) as error:
             self.json_response({"error": str(error)}, HTTPStatus.BAD_REQUEST)
+
+    def merchant_review_key(self) -> tuple[str, str]:
+        query = parse_qs(urlparse(self.path).query)
+        merchant = query["merchant"][-1].strip()
+        direction = query["direction"][-1]
+        if not merchant:
+            raise ValueError("复核组商户不能为空。")
+        if direction not in ("income", "expense"):
+            raise ValueError("复核组方向必须是 income 或 expense。")
+        return merchant, direction
 
     def json_body(self) -> dict:
         length = int(self.headers.get("Content-Length", "0"))
@@ -165,8 +206,8 @@ def parse_multipart(handler: BaseHTTPRequestHandler) -> tuple[dict[str, str], di
 
 
 def render_page(path: str) -> str:
-    title = {"/": "收支报表", "/import": "导入账单", "/transactions": "交易管理", "/review": "待复核", "/categories": "分类管理"}[path]
-    nav = [("/", "报表"), ("/import", "导入"), ("/transactions", "交易"), ("/review", "复核"), ("/categories", "分类")]
+    title = {"/": "收支报表", "/import": "导入账单", "/transactions": "交易管理", "/review": "待复核", "/merchant-review": "商户复核", "/categories": "分类管理"}[path]
+    nav = [("/", "报表"), ("/import", "导入"), ("/transactions", "交易"), ("/review", "复核"), ("/merchant-review", "商户复核"), ("/categories", "分类")]
     links = "".join(f'<a class="{"active" if href == path else ""}" href="{href}">{label}</a>' for href, label in nav)
     return f"""<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{title} · Finance Tracker</title><link rel="stylesheet" href="/static/style.css"></head>
     <body data-page="{escape(path)}"><header><div><strong>Finance Tracker</strong><span>本地离线账单管理</span></div><nav>{links}</nav></header><main><h1>{title}</h1><div id="app"></div></main><script src="/static/app.js"></script></body></html>"""

@@ -50,4 +50,15 @@ assert.deepEqual(Array.from(displayedBlockers).map(item => item.filename), ["a.c
 assert.equal(ui.legacyBlockersForDisplay({ blockers: [{ filename: "a.csv, b.csv", error: "legacy" }] }).length, 1);
 assert.equal(ui.legacyBlockersForDisplay({ audit: { findings: [{ code: "DUPLICATE_EXTERNAL_ID", details: {} }] }, blockers: [{ filename: "", error: "批次内存在重复 external ID" }] }).length, 0);
 
-console.log("UI logic tests: 8 assertions passed");
+assert.equal(ui.merchantReviewPriority({ merchant: "Unknown bank transaction", category_reason: "unclassified" }), 0);
+assert.equal(ui.merchantReviewPriority({ merchant: "SHOP", category_reason: "rule_conflict_contains" }), 1);
+assert.equal(ui.merchantReviewAction({ key: "Enter" }), "apply");
+assert.equal(ui.merchantReviewAction({ key: "s" }), "skip");
+assert.equal(ui.merchantReviewAction({ key: "E" }), "override");
+assert.equal(ui.merchantReviewAction({ key: "Enter", target: { tagName: "BUTTON" } }), "");
+assert.equal(ui.merchantReviewAction({ key: "s", target: { tagName: "SELECT" } }), "");
+const overrideState = { overrideCategoryIds: { 7: "4" }, selectedCategoryId: "2" };
+assert.equal(ui.merchantReviewOverrideCategory(overrideState, { id: 7, category_id: 1 }), "4");
+assert.equal(ui.merchantReviewOverrideCategory({ ...overrideState, error: "请求失败" }, { id: 7, category_id: 1 }), "4");
+
+console.log("UI logic tests: 28 assertions passed");

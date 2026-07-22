@@ -10,6 +10,7 @@ __pycache__/
 *.egg-info/
 .claude/
 .playwright-mcp/
+.playwright-cli/
 .venv-phase1/
 .tmp/
 .superpowers/

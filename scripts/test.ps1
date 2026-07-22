@@ -55,4 +55,9 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 node .\tests\test_kontoumsaetze_browser.mjs
+if ($LASTEXITCODE -ne 0) {
+    exit $LASTEXITCODE
+}
+
+node .\tests\test_merchant_review_browser.mjs
 exit $LASTEXITCODE

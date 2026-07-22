@@ -4,10 +4,13 @@ import json
 import hashlib
 import sqlite3
 import tempfile
+import threading
 import unittest
 from datetime import date
 from decimal import Decimal
+from http.client import HTTPConnection
 from pathlib import Path
+from urllib.parse import urlencode
 
 from finance_tracker.config import FinanceTrackerConfig, default_config_path
 from finance_tracker.db import Database
@@ -110,6 +113,169 @@ class FinanceTrackerTests(unittest.TestCase):
             }
             for row in rows
         ]
+
+    def _seed_review_rows(self, rows: list[tuple[str, int, str, str, str]]) -> list[int]:
+        prepared = []
+        for index, (merchant, amount_cents, category_status, excluded_reason, transaction_kind) in enumerate(rows):
+            transaction = ParsedTransaction(
+                booking_date=date(2026, 6, 1), value_date=date(2026, 6, 1),
+                amount=Decimal(amount_cents) / 100, currency="EUR", merchant_raw=merchant,
+                merchant_normalized=merchant, description_raw="Synthetic merchant review transaction",
+                account="ME", source_format="synthetic", source_record_index=index,
+                source_record_key=f"merchant-review:{index}", raw={"synthetic": True, "index": index},
+            )
+            item = self.service._prepare(transaction, "synthetic")
+            item.update(
+                category_status=category_status, category_reason="unclassified",
+                excluded_reason=excluded_reason, transaction_kind=transaction_kind,
+            )
+            prepared.append(item)
+        self.db.write_import(
+            {"path": "", "filename": "merchant-review.csv", "source_type": "synthetic", "sha256": "merchant-review-seed"},
+            prepared,
+        )
+        return [row["id"] for row in self.db.transaction_rows()]
+
+    def _json_request(self, method: str, path: str, body: dict | None = None, expected_status: int = 200):
+        from finance_tracker.app import build_server
+
+        server = build_server("127.0.0.1", 0, self.db.path)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            content = json.dumps(body).encode("utf-8") if body is not None else None
+            connection = HTTPConnection("127.0.0.1", server.server_port, timeout=5)
+            headers = {"Content-Type": "application/json; charset=utf-8"} if content is not None else {}
+            connection.request(method, path, body=content, headers=headers)
+            response = connection.getresponse()
+            payload = json.loads(response.read().decode("utf-8"))
+            connection.close()
+            self.assertEqual(expected_status, response.status, payload)
+            return payload
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
+
+    def test_merchant_review_groups_exclude_completed_and_non_spending_rows(self):
+        self._seed_review_rows([
+            ("SYNTHETIC SHOP", -1000, "unclassified", "", "cash"),
+            ("SYNTHETIC SHOP", -2000, "unclassified", "", "cash"),
+            ("UNKNOWN MERCHANT", -500, "unclassified", "", "cash"),
+            ("MANUAL SHOP", -700, "manual", "", "cash"),
+            ("TRANSFER", -100, "unclassified", "", "internal_transfer"),
+        ])
+
+        groups = [dict(row) for row in self.db.merchant_review_groups()]
+
+        self.assertEqual(["UNKNOWN MERCHANT", "SYNTHETIC SHOP"], [row["merchant"] for row in groups])
+        self.assertEqual(2, groups[1]["transaction_count"])
+        self.assertEqual(-3000, groups[1]["amount_cents"])
+        self.assertEqual(1, groups[1]["account_count"])
+        self.assertEqual(2, len(self.db.merchant_review_group("SYNTHETIC SHOP", "expense")))
+        self.service.skip_merchant_review_group("SYNTHETIC SHOP", "expense")
+        self.assertEqual(["UNKNOWN MERCHANT"], [row["merchant"] for row in self.db.merchant_review_groups()])
+
+    def test_review_rule_backfills_group_and_preserves_manual_override(self):
+        ids = self._seed_review_rows([
+            ("SYNTHETIC SHOP", -1000, "unclassified", "", "cash"),
+            ("SYNTHETIC SHOP", -2000, "unclassified", "", "cash"),
+        ])
+        category_id = next(row["id"] for row in self.db.category_rows() if row["bucket"] == "expense")
+        self.db.set_override(ids[0], category_id, "synthetic exception")
+
+        self.assertEqual(1, self.service.merchant_review_impact("SYNTHETIC SHOP", "expense")["affected_count"])
+        self.assertEqual(1, self.service.apply_merchant_review_rule("SYNTHETIC SHOP", "expense", category_id)["updated_count"])
+
+        rows = {row["id"]: row for row in self.db.transaction_rows()}
+        self.assertEqual("manual", rows[ids[0]]["category_status"])
+        self.assertEqual("merchant_review_rule", rows[ids[1]]["category_reason"])
+        self.assertEqual(1, self.db.audit_count("merchant_review_rule_applied"))
+
+    def test_review_rule_rejects_wrong_bucket_and_expired_group(self):
+        self._seed_review_rows([("SYNTHETIC SHOP", -1000, "unclassified", "", "cash")])
+        expense_category_id = next(row["id"] for row in self.db.category_rows() if row["bucket"] == "expense")
+        income_category_id = next(row["id"] for row in self.db.category_rows() if row["bucket"] == "income")
+
+        with self.assertRaisesRegex(ValueError, "分类"):
+            self.service.apply_merchant_review_rule("SYNTHETIC SHOP", "expense", income_category_id)
+        with self.assertRaisesRegex(ValueError, "过期"):
+            self.service.apply_merchant_review_rule("MISSING SHOP", "expense", expense_category_id)
+
+    def test_review_rule_replaces_existing_direction_rule(self):
+        self._seed_review_rows([("SYNTHETIC SHOP", -1000, "unclassified", "", "cash")])
+        first_expense_category_id = next(row["id"] for row in self.db.category_rows() if row["bucket"] == "expense")
+        self.db.add_category("Synthetic", "Synthetic", "Alternative", "expense")
+        replacement_category_id = next(row["id"] for row in self.db.category_rows() if row["level3"] == "Alternative")
+        merchant_id = self.db.upsert_canonical_merchant("SYNTHETIC SHOP", "synthetic")
+        self.db.upsert_merchant_alias(merchant_id, "SYNTHETIC", "contains", "synthetic")
+        self.db.upsert_merchant_category_rule(merchant_id, "expense", first_expense_category_id, "synthetic")
+
+        self.service.apply_merchant_review_rule("SYNTHETIC SHOP", "expense", replacement_category_id)
+
+        rules = [row for row in self.db.rule_rows() if row["canonical_merchant"] == "SYNTHETIC SHOP" and row["direction"] == "expense"]
+        self.assertEqual({replacement_category_id}, {row["category_id"] for row in rules})
+
+    def test_review_rule_only_backfills_eligible_group_rows(self):
+        ids = self._seed_review_rows([
+            ("SYNTHETIC SHOP", -1000, "unclassified", "", "cash"),
+            ("SYNTHETIC SHOP", -2000, "manual", "", "cash"),
+            ("SYNTHETIC SHOP", -3000, "unclassified", "internal_transfer", "cash"),
+            ("SYNTHETIC SHOP", -4000, "unclassified", "", "internal_transfer"),
+        ])
+        category_id = next(row["id"] for row in self.db.category_rows() if row["bucket"] == "expense")
+
+        self.assertEqual(1, self.service.merchant_review_impact("SYNTHETIC SHOP", "expense")["affected_count"])
+        self.service.apply_merchant_review_rule("SYNTHETIC SHOP", "expense", category_id)
+
+        rows = {row["amount_cents"]: row for row in self.db.transaction_rows()}
+        self.assertEqual("merchant_review_rule", rows[-1000]["category_reason"])
+        self.assertEqual("manual", rows[-2000]["category_status"])
+        self.assertEqual("unclassified", rows[-3000]["category_status"])
+        self.assertEqual("unclassified", rows[-4000]["category_status"])
+
+    def test_merchant_review_http_api(self):
+        from finance_tracker.app import render_page
+
+        self.assertIn('data-page="/merchant-review"', render_page("/merchant-review"))
+        self.assertIn("商户复核", render_page("/merchant-review"))
+        self._seed_review_rows([
+            ("SYNTHETIC SHOP", -1000, "unclassified", "", "cash"),
+            ("SYNTHETIC SHOP", -2000, "unclassified", "", "cash"),
+            ("SECOND SYNTHETIC SHOP", -3000, "unclassified", "", "cash"),
+        ])
+        transaction_id = next(row["id"] for row in self.db.transaction_rows() if row["merchant"] == "SYNTHETIC SHOP")
+        expense_id = next(row["id"] for row in self.db.category_rows() if row["bucket"] == "expense")
+        query = urlencode({"merchant": "SYNTHETIC SHOP", "direction": "expense"})
+
+        groups = self._json_request("GET", "/api/merchant-review/groups")
+        self.assertIn("SYNTHETIC SHOP", [group["merchant"] for group in groups])
+        impact = self._json_request("GET", f"/api/merchant-review/impact?{query}")
+        self.assertEqual(2, impact["affected_count"])
+        details = self._json_request("GET", f"/api/merchant-review/group?{query}")
+        self.assertEqual({"id", "booking_date", "amount_cents", "account", "category_id"}, set(details[0]))
+        self.assertNotIn("description_raw", details[0])
+
+        self._json_request("POST", "/api/merchant-review/override", {
+            "transaction_id": transaction_id, "category_id": expense_id,
+        })
+        self.assertEqual("manual", next(row for row in self.db.transaction_rows() if row["id"] == transaction_id)["category_status"])
+        self._json_request("POST", "/api/merchant-review/skip", {
+            "merchant": "SYNTHETIC SHOP", "direction": "expense",
+        })
+        self.assertEqual(["SECOND SYNTHETIC SHOP"], [
+            group["merchant"] for group in self._json_request("GET", "/api/merchant-review/groups")
+        ])
+        applied = self._json_request("POST", "/api/merchant-review/apply", {
+            "merchant": "SECOND SYNTHETIC SHOP", "direction": "expense", "category_id": expense_id,
+        })
+        self.assertEqual(1, applied["updated_count"])
+        error = self._json_request("POST", "/api/merchant-review/apply", {
+            "merchant": "SYNTHETIC SHOP", "direction": "expense", "category_id": expense_id,
+        }, expected_status=400)
+        self.assertIn("过期", error["error"])
+        invalid = self._json_request("GET", "/api/merchant-review/impact?merchant=SYNTHETIC%20SHOP&direction=other", expected_status=400)
+        self.assertIn("方向", invalid["error"])
 
     def test_paypal_english_and_german_are_both_supported(self):
         english = parse_paypal_csv(self._fixture_bytes("paypal_en.csv"), "paypal-me.csv", self.config)
@@ -444,6 +610,25 @@ class FinanceTrackerTests(unittest.TestCase):
         self.assertEqual("matched_refund_pair", rows["CB-1"])
         self.assertEqual("matched_refund_pair", rows["CB-2"])
 
+    def test_refund_reconciliation_counts_one_suggested_pair_once(self):
+        debit = ParsedTransaction(
+            booking_date=date(2026, 6, 1), value_date=date(2026, 6, 1), amount=Decimal("-18.00"),
+            currency="EUR", merchant_raw="Alphaone", merchant_normalized="Alphaone",
+            description_raw="Outbound only", account="ME", source_format="synthetic", source_record_key="suggestion-debit",
+        )
+        credit = ParsedTransaction(
+            booking_date=date(2026, 6, 3), value_date=date(2026, 6, 3), amount=Decimal("18.00"),
+            currency="EUR", merchant_raw="Betatwo", merchant_normalized="Betatwo",
+            description_raw="Inbound distinct", account="ME", source_format="synthetic", source_record_key="suggestion-credit",
+        )
+        self.db.write_import(
+            {"path": "", "filename": "suggestion.csv", "source_type": "synthetic", "sha256": "suggestion-pair"},
+            [self.service._prepare(debit, "synthetic"), self.service._prepare(credit, "synthetic")],
+        )
+
+        self.assertEqual({"automatic": 0, "suggested": 1}, self.db.reconcile_refunds())
+        self.assertEqual(1, self.db.table_count("reconciliations"))
+
     def test_batch_write_import_is_atomic_across_multiple_files(self):
         transactions = parse_paypal_csv(self._fixture_bytes("paypal_en.csv"), "paypal-me.csv", self.config)
         rows_a = [self.service._prepare(transactions[0], "paypal_csv")]
@@ -555,14 +740,62 @@ class FinanceTrackerTests(unittest.TestCase):
         try:
             self.assertNotIn("canonical_merchant_id", [row[1] for row in con.execute("PRAGMA table_info(transactions)")])
             self.assertNotIn("category_status", [row[1] for row in con.execute("PRAGMA table_info(transactions)")])
+            self.assertNotIn("value_date", [row[1] for row in con.execute("PRAGMA table_info(transactions)")])
         finally:
             con.close()
         con = sqlite3.connect(database_path)
         try:
             self.assertIn("canonical_merchant_id", [row[1] for row in con.execute("PRAGMA table_info(transactions)")])
             self.assertIn("category_status", [row[1] for row in con.execute("PRAGMA table_info(transactions)")])
+            self.assertIn("value_date", [row[1] for row in con.execute("PRAGMA table_info(transactions)")])
         finally:
             con.close()
+
+    def test_schema_upgrade_recovers_all_current_import_columns(self):
+        project_root = Path(self.directory.name) / "project"
+        database_path = project_root / "data" / "finance_tracker.sqlite3"
+        database = Database(database_path)
+        database.initialize()
+        missing_columns = (
+            "merchant_raw", "transaction_type", "source_format", "source_record_index",
+            "source_record_key", "is_internal_transfer", "is_failed_transaction",
+        )
+        with database.connect() as con:
+            for column in missing_columns:
+                con.execute(f"ALTER TABLE transactions DROP COLUMN {column}")
+
+        database.initialize()
+        service = FinanceService(database, self.config)
+        transaction = ParsedTransaction(
+            booking_date=date(2026, 6, 1), value_date=date(2026, 6, 1), amount=Decimal("-1.00"),
+            currency="EUR", merchant_raw="SYNTHETIC MARKET", merchant_normalized="SYNTHETIC MARKET",
+            description_raw="Synthetic legacy migration regression", account="ME", source_format="synthetic",
+            source_record_key="legacy-schema-regression",
+        )
+        result = database.write_import(
+            {"path": "", "filename": "synthetic.csv", "source_type": "synthetic", "sha256": "legacy-schema-regression"},
+            [service._prepare(transaction, "synthetic")],
+        )
+
+        self.assertEqual(1, result["inserted"])
+        with database.connect() as con:
+            columns = {row[1] for row in con.execute("PRAGMA table_info(transactions)")}
+        self.assertTrue(set(missing_columns).issubset(columns))
+
+    def test_schema_upgrade_recovers_reconciliation_write_columns(self):
+        with self.db.connect() as con:
+            con.execute("ALTER TABLE reconciliations DROP COLUMN reason")
+            con.execute("ALTER TABLE reconciliations DROP COLUMN status")
+
+        self.db.initialize()
+        debit = b"Date,Description,Currency,Gross,Name,Transaction ID,From Email Address\n01.06.2026,Express Checkout Payment,EUR,-18.00,Legacy Reconciliation Shop,LR-1,me@example.invalid\n"
+        credit = b"Date,Description,Currency,Gross,Name,Transaction ID,From Email Address\n03.06.2026,Payment Refund,EUR,18.00,Legacy Reconciliation Shop,LR-2,me@example.invalid\n"
+        self.service.confirm(self.service.preview("debit.csv", debit).token)
+        self.service.confirm(self.service.preview("credit.csv", credit).token)
+
+        reconciliation = next(row for row in self.db.reconciliation_rows() if row["kind"] == "refund_pair")
+        self.assertEqual("refund_amount_date_merchant_match", reconciliation["reason"])
+        self.assertEqual("automatic", reconciliation["status"])
 
     def test_remove_pdf_source_data_is_atomic_and_idempotent(self):
         self._use_project_database()

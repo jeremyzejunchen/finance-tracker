@@ -35,7 +35,7 @@ class Database:
             con.close()
 
     def initialize(self) -> None:
-        if self._needs_transaction_columns():
+        if self._needs_schema_columns():
             self._backup_before_schema_change()
         with self.connect() as con:
             con.executescript(
@@ -103,6 +103,13 @@ class Database:
                     before_json TEXT NOT NULL DEFAULT '{}', after_json TEXT NOT NULL DEFAULT '{}',
                     note TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS merchant_review_progress (
+                    merchant TEXT NOT NULL,
+                    direction TEXT NOT NULL CHECK(direction IN ('income','expense')),
+                    status TEXT NOT NULL CHECK(status IN ('skipped','completed')),
+                    updated_at TEXT NOT NULL,
+                    PRIMARY KEY(merchant, direction)
+                );
                 CREATE INDEX IF NOT EXISTS idx_txn_date ON transactions(booking_date);
                 CREATE INDEX IF NOT EXISTS idx_txn_source ON transactions(source_file_id);
                 CREATE INDEX IF NOT EXISTS idx_txn_category ON transactions(category_id);
@@ -111,10 +118,25 @@ class Database:
             missing_columns = {
                 "category_status": "TEXT NOT NULL DEFAULT 'unclassified'",
                 "canonical_merchant_id": "INTEGER REFERENCES canonical_merchants(id)",
+                "value_date": "TEXT NOT NULL DEFAULT ''",
+                "merchant_raw": "TEXT NOT NULL DEFAULT ''",
+                "transaction_type": "TEXT NOT NULL DEFAULT ''",
+                "source_format": "TEXT NOT NULL DEFAULT ''",
+                "source_record_index": "INTEGER NOT NULL DEFAULT 0",
+                "source_record_key": "TEXT NOT NULL DEFAULT ''",
+                "is_internal_transfer": "INTEGER NOT NULL DEFAULT 0",
+                "is_failed_transaction": "INTEGER NOT NULL DEFAULT 0",
             }
             for column, definition in missing_columns.items():
                 if not self._has_column(con, "transactions", column):
                     con.execute(f"ALTER TABLE transactions ADD COLUMN {column} {definition}")
+            missing_reconciliation_columns = {
+                "reason": "TEXT NOT NULL DEFAULT ''",
+                "status": "TEXT NOT NULL DEFAULT 'suggested'",
+            }
+            for column, definition in missing_reconciliation_columns.items():
+                if not self._has_column(con, "reconciliations", column):
+                    con.execute(f"ALTER TABLE reconciliations ADD COLUMN {column} {definition}")
             for level1, level2, level3, bucket in DEFAULT_CATEGORIES:
                 con.execute("INSERT OR IGNORE INTO categories(level1,level2,level3,bucket) VALUES(?,?,?,?)", (level1, level2, level3, bucket))
             needs_pdf_source_removal = con.execute(
@@ -259,15 +281,24 @@ class Database:
         con.execute("INSERT OR IGNORE INTO canonical_merchants(name,source) VALUES(?,?)", (name.strip(), source))
         return con.execute("SELECT id FROM canonical_merchants WHERE name=?", (name.strip(),)).fetchone()["id"]
 
-    def _needs_transaction_columns(self) -> bool:
+    def _needs_schema_columns(self) -> bool:
         if not self.path.is_file() or self.path.stat().st_size == 0:
             return False
         con = sqlite3.connect(self.path)
         try:
-            return self._has_column(con, "transactions", "id") and any(
+            transactions_need_upgrade = self._has_column(con, "transactions", "id") and any(
                 not self._has_column(con, "transactions", column)
-                for column in ("category_status", "canonical_merchant_id")
+                for column in (
+                    "category_status", "canonical_merchant_id", "value_date", "merchant_raw",
+                    "transaction_type", "source_format", "source_record_index", "source_record_key",
+                    "is_internal_transfer", "is_failed_transaction",
+                )
             )
+            reconciliations_need_upgrade = self._has_column(con, "reconciliations", "id") and any(
+                not self._has_column(con, "reconciliations", column)
+                for column in ("reason", "status")
+            )
+            return transactions_need_upgrade or reconciliations_need_upgrade
         finally:
             con.close()
 
@@ -430,6 +461,127 @@ class Database:
                 params,
             ).fetchall()
 
+    def merchant_review_groups(self) -> list[sqlite3.Row]:
+        with self.connect() as con:
+            return con.execute(
+                """WITH review_rows AS (
+                    SELECT t.*,
+                    CASE WHEN t.amount_cents < 0 THEN 'expense' ELSE 'income' END AS direction
+                    FROM transactions t
+                    WHERE t.category_status='unclassified' AND t.excluded_reason=''
+                    AND t.unsupported_currency=0 AND t.transaction_kind='cash' AND t.amount_cents != 0
+                )
+                SELECT r.merchant, r.direction, COUNT(*) AS transaction_count,
+                SUM(r.amount_cents) AS amount_cents, MIN(r.booking_date) AS date_from,
+                MAX(r.booking_date) AS date_to, COUNT(DISTINCT r.account) AS account_count,
+                MIN(r.category_reason) AS category_reason
+                FROM review_rows r
+                LEFT JOIN merchant_review_progress p ON p.merchant=r.merchant AND p.direction=r.direction
+                WHERE p.merchant IS NULL
+                GROUP BY r.merchant, r.direction
+                ORDER BY CASE
+                    WHEN LOWER(r.merchant) LIKE 'unknown %' THEN 0
+                    WHEN MIN(r.category_reason) LIKE 'rule_conflict%' THEN 1
+                    ELSE 2
+                END, transaction_count DESC, r.merchant ASC"""
+            ).fetchall()
+
+    def merchant_review_group(self, merchant: str, direction: str) -> list[sqlite3.Row]:
+        with self.connect() as con:
+            return self._merchant_review_group_rows(con, merchant, direction)
+
+    def merchant_review_impact(self, merchant: str, direction: str) -> dict:
+        with self.connect() as con:
+            rows = self._merchant_review_group_rows(con, merchant, direction)
+        return {
+            "merchant": merchant,
+            "direction": direction,
+            "affected_count": len(rows),
+            "date_from": min((row["booking_date"] for row in rows), default=""),
+            "date_to": max((row["booking_date"] for row in rows), default=""),
+            "account_count": len({row["account"] for row in rows}),
+        }
+
+    def apply_merchant_review_rule(self, merchant: str, direction: str, category_id: int) -> dict:
+        if direction not in ("income", "expense"):
+            raise ValueError("复核组方向必须是 income 或 expense。")
+        with self.connect() as con:
+            category = con.execute(
+                "SELECT id FROM categories WHERE id=? AND active=1 AND bucket=?", (category_id, direction)
+            ).fetchone()
+            if category is None:
+                raise ValueError("分类不存在或与收支方向不一致。")
+            rows = self._merchant_review_group_rows(con, merchant, direction)
+            if not rows:
+                raise ValueError("复核组已过期，请刷新页面。")
+
+            merchant_id = self._upsert_canonical_merchant(con, merchant, "merchant_review")
+            con.execute(
+                "INSERT OR IGNORE INTO merchant_aliases(canonical_merchant_id,pattern,match_kind,source) VALUES(?,?,?,?)",
+                (merchant_id, merchant, "exact", "merchant_review"),
+            )
+            con.execute(
+                "DELETE FROM merchant_category_rules WHERE canonical_merchant_id=? AND direction=?",
+                (merchant_id, direction),
+            )
+            con.execute(
+                "INSERT INTO merchant_category_rules(canonical_merchant_id,direction,category_id,source) VALUES(?,?,?,?)",
+                (merchant_id, direction, category_id, "merchant_review"),
+            )
+
+            updated_count = 0
+            for row in rows:
+                before = {key: row[key] for key in ("canonical_merchant_id", "category_id", "category_status", "category_reason")}
+                after = {
+                    "canonical_merchant_id": merchant_id,
+                    "category_id": category_id,
+                    "category_status": "classified",
+                    "category_reason": "merchant_review_rule",
+                }
+                updated = con.execute(
+                    """UPDATE transactions SET canonical_merchant_id=?, category_id=?, category_status=?, category_reason=?
+                    WHERE id=? AND merchant=? AND category_status='unclassified' AND excluded_reason=''
+                    AND unsupported_currency=0 AND transaction_kind='cash' AND amount_cents != 0
+                    AND CASE WHEN amount_cents < 0 THEN 'expense' ELSE 'income' END=?""",
+                    (merchant_id, category_id, "classified", "merchant_review_rule", row["id"], merchant, direction),
+                )
+                if updated.rowcount:
+                    con.execute(
+                        "INSERT INTO audit_log(transaction_id,action,before_json,after_json,note,created_at) VALUES(?,?,?,?,?,?)",
+                        (row["id"], "merchant_review_rule_applied", json.dumps(before), json.dumps(after), merchant, now()),
+                    )
+                    updated_count += 1
+            if not updated_count:
+                raise ValueError("复核组已过期，请刷新页面。")
+            con.execute(
+                """INSERT INTO merchant_review_progress(merchant,direction,status,updated_at) VALUES(?,?,?,?)
+                ON CONFLICT(merchant,direction) DO UPDATE SET status=excluded.status, updated_at=excluded.updated_at""",
+                (merchant, direction, "completed", now()),
+            )
+        return {"merchant": merchant, "direction": direction, "updated_count": updated_count}
+
+    @staticmethod
+    def _merchant_review_group_rows(con: sqlite3.Connection, merchant: str, direction: str) -> list[sqlite3.Row]:
+        return con.execute(
+            """SELECT t.* FROM transactions t
+            LEFT JOIN merchant_review_progress p ON p.merchant=t.merchant
+            AND p.direction=CASE WHEN t.amount_cents < 0 THEN 'expense' ELSE 'income' END
+            WHERE t.merchant=? AND CASE WHEN t.amount_cents < 0 THEN 'expense' ELSE 'income' END=?
+            AND t.category_status='unclassified' AND t.excluded_reason=''
+            AND t.unsupported_currency=0 AND t.transaction_kind='cash' AND t.amount_cents != 0
+            AND p.merchant IS NULL
+            ORDER BY t.booking_date ASC, t.id ASC""",
+            (merchant, direction),
+        ).fetchall()
+
+    def skip_merchant_review_group(self, merchant: str, direction: str) -> None:
+        with self.connect() as con:
+            con.execute(
+                """INSERT INTO merchant_review_progress(merchant,direction,status,updated_at) VALUES(?,?,?,?)
+                ON CONFLICT(merchant,direction) DO UPDATE SET status=excluded.status, updated_at=excluded.updated_at""",
+                (merchant, direction, "skipped", now()),
+            )
+
     def set_override(self, transaction_id: int, category_id: int, note: str) -> None:
         with self.connect() as con:
             before = con.execute("SELECT category_id,category_reason,category_status FROM transactions WHERE id=?", (transaction_id,)).fetchone()
@@ -469,14 +621,14 @@ class Database:
                 status = "automatic" if len(top) == 1 and top_score >= 0.9 else "suggested"
                 target = top[0][0]
                 reason = "refund_amount_date_merchant_match" if top_score >= 0.9 else "refund_amount_date_possible_match"
-                con.execute(
+                inserted = con.execute(
                     "INSERT OR IGNORE INTO reconciliations(left_transaction_id,right_transaction_id,kind,reason,confidence,status) VALUES(?,?,?,?,?,?)",
                     (min(left["id"], target["id"]), max(left["id"], target["id"]), "refund_pair", reason, top_score, status),
-                )
+                ).rowcount == 1
                 if status == "automatic":
                     con.execute("UPDATE transactions SET excluded_reason='matched_refund_pair' WHERE id IN (?,?) AND excluded_reason=''", (left["id"], target["id"]))
-                    automatic += 1
-                else:
+                    automatic += int(inserted)
+                elif inserted:
                     suggested += 1
         return {"automatic": automatic, "suggested": suggested}
 
